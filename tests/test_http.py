@@ -73,15 +73,36 @@ class TestNoIdempotencyConcept:
 
         assert not hasattr(Adapter, "supports_idempotency_key")
 
-    def test_purchases_are_never_retried(self) -> None:
-        """The one guarantee that actually holds, on every provider."""
+    def test_no_money_moving_request_is_ever_retried(self) -> None:
+        """Every request to a purchase, label or refund route must pass retries=0.
+
+        Checked by walking the AST rather than slicing source text, so moving a
+        call into a helper cannot silently drop the guarantee — which is exactly
+        what happened when EasyPost's buy() was split into _buy_shipment and
+        _buy_order.
+        """
+        import ast
         import pathlib as _p
 
-        for name in ("easypost", "shippo", "shipstation_v1", "shipstation_v2", "easyship"):
-            src = _p.Path(f"shipzil/providers/{name}.py").read_text()
-            buy = src[src.index("    def buy("):]
-            buy = buy[: buy.index("\n    def ", 10)] if "\n    def " in buy[10:] else buy
-            assert "retries=0" in buy, f"{name}.buy must pass retries=0"
+        spends = ("buy", "labels", "transactions", "refunds", "voidlabel", "createlabel")
+        checked = 0
+        for path in sorted(_p.Path("shipzil/providers").glob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "request"):
+                    continue
+                url = " ".join(
+                    ast.unparse(a) for a in node.args[1:2]
+                ) + " ".join(ast.unparse(k.value) for k in node.keywords if k.arg == "url")
+                if not any(tok in url.lower() for tok in spends):
+                    continue
+                retries = next((k.value for k in node.keywords if k.arg == "retries"), None)
+                assert retries is not None, f"{path.name}: {url} has no retries="
+                assert getattr(retries, "value", None) == 0, (
+                    f"{path.name}: {url} must pass retries=0, got {ast.unparse(retries)}"
+                )
+                checked += 1
+        assert checked >= 6, f"expected to find several money-moving calls, found {checked}"
 
 
 class TestCredentialGuardsAreBools:

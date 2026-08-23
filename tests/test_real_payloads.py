@@ -251,3 +251,81 @@ class TestShipStationV1TestLabel:
         label = adapter._label(load("ss1_testlabel.json"), rate)
         with pytest.raises(LabelPurchaseError, match="no shipment to void"):
             adapter.void(label)
+
+
+class TestEasyPostOrderBuy:
+    """Buying an EasyPost *order* is a different endpoint and a different body.
+
+    The first implementation sent `POST /shipments/{order_id}/buy` with
+    `{"rate": {"id": ...}}`. Both were wrong, and nothing caught it because only
+    the single-parcel shipment path had ever run against live credentials. The
+    real contract, from EasyPost's own recorded test traffic:
+
+        POST /orders/{id}/buy   {"carrier": "USPS", "service": "GroundAdvantage"}
+        -> {"shipments": [{..., "postage_label": {...}, "tracking_code": ...}, ...]}
+
+    Multi-parcel is this library's headline feature, so this is the single most
+    important purchase path to get right.
+    """
+
+    def test_fixture_is_a_real_multi_shipment_order_buy(self) -> None:
+        d = load("ep_order_buy.json")
+        assert d["object"] == "Order"
+        assert d["id"].startswith("order_")
+        assert len(d["shipments"]) == 2, "one shipment per parcel"
+        for s in d["shipments"]:
+            assert s["postage_label"]["label_url"], "each parcel gets its own label"
+            assert s["tracking_code"], "each parcel gets its own tracking code"
+
+    def test_order_buy_yields_one_label_per_parcel(self) -> None:
+        from shipzil.providers import EasyPostAdapter
+
+        adapter = EasyPostAdapter("EZTKtest")
+        body = load("ep_order_buy.json")
+        labels = tuple(adapter._label(s) for s in body["shipments"])
+        assert len(labels) == 2
+        # Distinct labels, not the same one twice.
+        assert labels[0].tracking_number != labels[1].tracking_number
+        assert labels[0].label_url != labels[1].label_url
+        assert all(lbl.is_test is True for lbl in labels)
+
+    def test_an_order_rate_routes_to_the_orders_endpoint(self) -> None:
+        """The routing decision, without touching the network."""
+        from decimal import Decimal
+
+        from shipzil.models import Rate, Strategy
+        from shipzil.providers import EasyPostAdapter
+
+        adapter = EasyPostAdapter("EZTKtest")
+        seen: dict[str, object] = {}
+
+        def fake_request(method: str, url: str, **kw: object) -> tuple[int, object]:
+            seen["url"] = url
+            seen["json"] = kw.get("json")
+            seen["retries"] = kw.get("retries")
+            return 200, load("ep_order_buy.json")
+
+        import shipzil.providers.easypost as mod
+
+        original = mod.request
+        mod.request = fake_request  # type: ignore[assignment]
+        try:
+            rate = Rate(
+                carrier="USPS",
+                service="GroundAdvantage",
+                amount=Decimal("11.74"),
+                provider="easypost",
+                strategy=Strategy.ORDER,
+                parcel_count=2,
+                raw={"_container_id": "order_c91fef40e21c48a3a4846ab323722583"},
+            )
+            label = adapter.buy(None, rate)  # type: ignore[arg-type]
+        finally:
+            mod.request = original  # type: ignore[assignment]
+
+        assert "/orders/order_c91fef40e21c48a3a4846ab323722583/buy" in str(seen["url"])
+        assert "/shipments/" not in str(seen["url"])
+        # Carrier and service by name, never a rate id.
+        assert seen["json"] == {"carrier": "USPS", "service": "GroundAdvantage"}
+        assert seen["retries"] == 0
+        assert len(label.parcel_labels) == 2

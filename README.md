@@ -113,11 +113,11 @@ against live credentials on all five surfaces. Purchasing is not:
 
 | | Rating | Purchase |
 |---|---|---|
-| EasyPost | live-verified | live-verified (test key) |
+| EasyPost | live-verified | shipment: live-verified. order: verified against EasyPost's recorded traffic |
 | Shippo | live-verified | live-verified (test token, buy and void) |
-| ShipStation v2 | live-verified | **never run live** — production keys only |
+| ShipStation v2 | live-verified | route verified, purchase **never run** — production keys only |
 | ShipStation v1 | live-verified | live-verified via `testLabel` (no charge) |
-| Easyship | live-verified | **never run live** — sandbox quota spent |
+| Easyship | live-verified | **never run live**, and rebuilt from spec after the first attempt called a nonexistent endpoint |
 
 ShipStation v1's purchase path was verified through `testLabel: true`, which
 returns a real label response without buying postage — confirmed by an unchanged
@@ -232,7 +232,7 @@ Shipped:
   no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 68 tests, including parser tests against captured real payloads
+- 65 tests, including parser tests against captured real payloads and provider SDK traffic
 
 Next, roughly in order:
 

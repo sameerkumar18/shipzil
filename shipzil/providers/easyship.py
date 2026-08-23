@@ -24,6 +24,7 @@ The odd one out, in ways that shaped the whole data model:
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -69,6 +70,8 @@ class EasyshipAdapter(Adapter):
         api_key: str,
         *,
         sandbox: bool | None = None,
+        label_timeout: float = 60.0,
+        poll_interval: float = 2.0,
         default_category: str | None = None,
         timeout: float = 90.0,
     ):
@@ -77,6 +80,8 @@ class EasyshipAdapter(Adapter):
         self.api_key = api_key
         # `sand_` prefixes sandbox keys; honour an explicit override.
         self.sandbox = api_key.startswith("sand_") if sandbox is None else sandbox
+        self.label_timeout = label_timeout
+        self.poll_interval = poll_interval
         self.base = SANDBOX_BASE if self.sandbox else PRODUCTION_BASE
         self.timeout = timeout
         # Applied only where an item supplies neither category nor hs_code. Left
@@ -172,16 +177,33 @@ class EasyshipAdapter(Adapter):
     # ── buying ──────────────────────────────────────────────────────
 
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
-        """Create the shipment, then request its label synchronously.
+        """Create the shipment, confirm it via `batch_labels`, then poll.
 
-        Easyship separates the two: `POST /shipments` then
-        `POST /shipments/{id}/labels`, which the docs describe as retrieving the
-        label synchronously. The batch endpoint is the asynchronous one and is
-        deliberately unused.
+        The first implementation of this method called
+        `POST /shipments/{id}/labels`, **which does not exist**, and its docstring
+        asserted that endpoint was synchronous while the batch endpoint was "the
+        asynchronous one and is deliberately unused". Both halves were invented.
+        The live API answers that path with "The requested endpoint does not
+        exist. The request does not comply with the OpenAPI Specification."
 
-        Easyship is
-        structurally protected instead: a second label request for the same
-        shipment id is refused with "labels already requested".
+        What 2024-09 actually offers, per Easyship's own OpenAPI index:
+
+        * `POST /shipments` creates a shipment, which starts at
+          `label_state: "not_created"`.
+        * `POST /batch_labels` (operationId `batch_labels_create`) confirms one
+          or more shipments and *begins* generating documents. It requires a
+          `shipments` array and takes an optional `courier_service_id`.
+        * Generation is **asynchronous**. `label_state` moves through
+          `not_created -> pending -> generated | failed`. There is no synchronous
+          single-label endpoint at all.
+
+        shipzil is synchronous, so this polls `GET /shipments/{id}` until the
+        state settles or `label_timeout` elapses, and raises rather than handing
+        back a label that does not exist yet.
+
+        Not verified live: the Easyship sandbox plan allowance is spent. This is
+        built from the published specification, which is exactly the weaker
+        evidence that produced the bug above, so treat it as unproven.
         """
         parcel = shipment.parcels[0]
         service_id = (rate.service_code or "").strip()
@@ -202,16 +224,45 @@ class EasyshipAdapter(Adapter):
         record = created.get("shipment") or created
         shipment_id = str(record.get("easyship_shipment_id") or record.get("id") or "")
         if not shipment_id:
-            raise LabelPurchaseError(
-                "easyship created no shipment id", provider=self.name
-            )
+            raise LabelPurchaseError("easyship created no shipment id", provider=self.name)
 
-        _status, labelled = request(
-            "POST", self._url(f"/shipments/{shipment_id}/labels"),
-            headers=self._headers, json={}, timeout=self.timeout,
-            provider=self.name, retries=0,
+        leg: dict[str, Any] = {"easyship_shipment_id": shipment_id}
+        if service_id:
+            leg["courier_service_id"] = service_id
+        request(
+            "POST", self._url("/batch_labels"),
+            headers=self._headers, json={"shipments": [leg]},
+            timeout=self.timeout, provider=self.name, retries=0,
         )
-        return self._parse_label(labelled, fallback_id=shipment_id, rate=rate)
+        return self._await_label(shipment_id, rate)
+
+    def _await_label(self, shipment_id: str, rate: Rate) -> Label:
+        """Poll until label_state settles. Async generation, synchronous surface."""
+        deadline = time.monotonic() + self.label_timeout
+        state = "pending"
+        body: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            _status, body = request(
+                "GET", self._url(f"/shipments/{shipment_id}"),
+                headers=self._headers, timeout=self.timeout,
+                provider=self.name, idempotent=True,
+            )
+            record = body.get("shipment") or body
+            state = str(record.get("label_state") or "")
+            if state == "generated":
+                return self._parse_label(body, fallback_id=shipment_id, rate=rate)
+            if state == "failed":
+                raise LabelPurchaseError(
+                    f"easyship label generation failed for {shipment_id}",
+                    provider=self.name,
+                )
+            time.sleep(self.poll_interval)
+        raise LabelPurchaseError(
+            f"easyship label for {shipment_id} was still {state or 'unknown'} after "
+            f"{self.label_timeout:.0f}s. The shipment is confirmed and may still "
+            f"complete; check label_state rather than buying again.",
+            provider=self.name,
+        )
 
     def _parse_label(
         self, body: dict[str, Any], *, fallback_id: str, rate: Rate

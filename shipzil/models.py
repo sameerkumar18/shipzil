@@ -278,4 +278,8 @@ class Label:
     shipment_id: str = ""
     #: True = test label, False = real purchase, None = undeterminable.
     is_test: bool | None = None
+    #: One entry per parcel when a single purchase produced several labels.
+    #: EasyPost's `POST /orders/{id}/buy` is the case that needs it: it returns
+    #: a `shipments` array, each with its own postage label and tracking code.
+    parcel_labels: tuple[Label, ...] = ()
     raw: Any = None

@@ -296,6 +296,75 @@ same id that appears in ShipStation **v2**'s exclusion text, "carrier 30718 does
 not support multipackage" — the two APIs share underlying carrier provider ids,
 which makes v1 and v2 responses correlatable.
 
+## Two endpoints were invented, and only cross-checking code found them
+
+Both were in purchase paths that had never executed. Documentation review had
+not caught either; official SDK source and recorded test traffic did.
+
+### EasyPost: orders and shipments buy completely differently
+
+shipzil sent `POST /shipments/{order_id}/buy` with `{"rate": {"id": ...}}` for
+an order-derived rate. Wrong endpoint and wrong body. The real contract, taken
+from `tests/cassettes/test_order_buy.yaml` in EasyPost's own repository:
+
+```
+POST /orders/{id}/buy    {"carrier": "USPS", "service": "GroundAdvantage"}
+-> {"object": "Order", "shipments": [
+     {"id": "shp_...", "tracking_code": "...", "postage_label": {"label_url": ...}},
+     {"id": "shp_...", "tracking_code": "...", "postage_label": {"label_url": ...}}]}
+```
+
+Orders buy by carrier and service **name**, not by rate id, and return one
+shipment per parcel each with its own label and tracking code. This is why
+`Label.parcel_labels` exists. It was deleted as dead code during a cleanup — it
+was dead precisely because the feature it served was broken.
+
+Multi-parcel is this library's headline feature, so this was the worst possible
+place for an unverified assumption. Fixture at `tests/fixtures/ep_order_buy.json`.
+
+### Easyship: the endpoint shipzil called does not exist
+
+shipzil sent `POST /shipments/{id}/labels`, and its docstring claimed that path
+was synchronous while "the batch endpoint is the asynchronous one and is
+deliberately unused". Every part of that was invented. The live API replies:
+
+```
+The requested endpoint does not exist.
+The request does not comply with the OpenAPI Specification.
+```
+
+What 2024-09 actually provides, per Easyship's published OpenAPI index:
+
+* `POST /shipments` creates a shipment at `label_state: "not_created"`.
+* `POST /batch_labels` (`batch_labels_create`) confirms shipments and *begins*
+  document generation. Requires a `shipments` array, takes an optional
+  `courier_service_id`.
+* Generation is **asynchronous**: `not_created -> pending -> generated | failed`.
+  There is no synchronous single-label endpoint.
+
+shipzil now confirms via `batch_labels` and polls `GET /shipments/{id}` until the
+state settles, bounded by `label_timeout`. Still unverified live, because the
+sandbox allowance is spent — built from the same class of evidence that produced
+the original bug, so treat it as unproven.
+
+### What checked out
+
+* **Shippo** `/transactions` body matches `TransactionCreateRequest` in the
+  official SDK (`rate`, `async` via alias, `label_file_type`), and `/refunds`
+  matches. Also verified live.
+* **ShipStation v2** `POST /labels/rates/{rate_id}` matches
+  `create_label_from_rate_id` in the ShipEngine SDK, and the route was probed on
+  `api.shipstation.com/v2` with a nonexistent rate id: it answers
+  "rate_id was invalid, unable to create label", so the route exists and
+  validates. The purchase itself still has not run.
+* **ShipStation v1** was already verified live including `testLabel`.
+
+### Easyship's edge blocks the default Python user-agent
+
+An unadorned `urllib` request gets Cloudflare error 1010 ("banned based on your
+browser's signature"), which looks exactly like an auth failure. shipzil sets a
+`User-Agent`, so this only bites when probing by hand.
+
 ## Test mode is knowable on four surfaces out of five
 
 | Provider | How | Value |

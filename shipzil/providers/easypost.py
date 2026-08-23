@@ -127,16 +127,40 @@ class EasyPostAdapter(Adapter):
     # ── buying ──────────────────────────────────────────────────────
 
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
+        """Buy postage. Orders and shipments are different endpoints entirely.
+
+        This is worth spelling out because the first implementation got it wrong
+        and no test caught it: only the single-parcel path had ever run.
+
+        * A **shipment** rate is bought with `POST /shipments/{id}/buy` and a
+          rate id: `{"rate": {"id": "rate_..."}}`.
+        * An **order** rate is bought with `POST /orders/{id}/buy` and a carrier
+          and service *by name*: `{"carrier": "USPS", "service": "GroundAdvantage"}`.
+          Orders have no per-rate purchase, and the response is a `shipments`
+          array where each entry carries its own `postage_label`.
+
+        Verified against EasyPost's own recorded test traffic
+        (`tests/cassettes/test_order_buy.yaml` in easypost-python), not docs.
+        """
         raw = rate.raw if isinstance(rate.raw, dict) else {}
-        shipment_id = raw.get("shipment_id") or raw.get("_container_id")
-        rate_id = raw.get("id")
-        if not shipment_id or not rate_id:
+        container_id = raw.get("shipment_id") or raw.get("_container_id")
+        if not container_id:
             raise LabelPurchaseError(
-                "this rate cannot be bought: it is missing the EasyPost shipment/rate ids. "
+                "this rate cannot be bought: it carries no EasyPost shipment or order id. "
                 "Rates produced by fan-out across parcels must be bought per parcel.",
                 provider=self.name,
             )
 
+        if rate.strategy is Strategy.ORDER or str(container_id).startswith("ord_"):
+            return self._buy_order(container_id, rate)
+        return self._buy_shipment(container_id, rate)
+
+    def _buy_shipment(self, shipment_id: str, rate: Rate) -> Label:
+        rate_id = (rate.raw or {}).get("id")
+        if not rate_id:
+            raise LabelPurchaseError(
+                "this shipment rate has no EasyPost rate id", provider=self.name
+            )
         _status, body = request(
             "POST",
             f"{BASE}/shipments/{shipment_id}/buy",
@@ -147,6 +171,47 @@ class EasyPostAdapter(Adapter):
             retries=0,  # never blind-retry a purchase
         )
         return self._label(body)
+
+    def _buy_order(self, order_id: str, rate: Rate) -> Label:
+        """Orders buy by carrier and service name, and yield one label per parcel."""
+        if not rate.carrier or not rate.service:
+            raise LabelPurchaseError(
+                "buying an EasyPost order needs the carrier and service names, and this "
+                f"rate has carrier={rate.carrier!r} service={rate.service!r}",
+                provider=self.name,
+            )
+        _status, body = request(
+            "POST",
+            f"{BASE}/orders/{order_id}/buy",
+            headers=self._headers,
+            json={"carrier": rate.carrier, "service": rate.service},
+            timeout=self.timeout,
+            provider=self.name,
+            retries=0,  # never blind-retry a purchase
+        )
+        shipments = body.get("shipments") or []
+        labels = tuple(self._label(s) for s in shipments if isinstance(s, dict))
+        if not labels:
+            raise LabelPurchaseError(
+                "EasyPost order purchase returned no shipments to take labels from",
+                provider=self.name,
+                messages=[str(m) for m in (body.get("messages") or [])],
+            )
+        # The order-level result: first label's identifiers, every label attached.
+        head = labels[0]
+        return Label(
+            tracking_number=head.tracking_number,
+            label_url=head.label_url,
+            carrier=rate.carrier,
+            service=rate.service,
+            amount=rate.amount,
+            currency=rate.currency,
+            provider=self.name,
+            shipment_id=str(body.get("id") or order_id),
+            is_test=self.is_test_mode(),
+            parcel_labels=labels,
+            raw=body,
+        )
 
     def void(self, label: Label) -> bool:
         if not label.shipment_id:
