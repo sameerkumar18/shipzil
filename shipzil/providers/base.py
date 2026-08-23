@@ -55,6 +55,22 @@ class Adapter(ABC):
     name: str = ""
     capabilities: Capabilities = Capabilities()
 
+    #: Whether the provider accepts a client-supplied idempotency key on
+    #: purchase and will collapse a repeat into the original label.
+    #:
+    #: **Only EasyPost does.** Verified against provider documentation, not
+    #: assumed: Shippo documents no such header on `/transactions` (its
+    #: "idempotency key" is internal billing reconciliation), and ShipStation
+    #: v2 documents exactly two headers, `API-Key` and `Content-Type`.
+    #: Easyship has no key either, but is structurally protected — a second
+    #: label request for the same shipment id is refused with "labels already
+    #: requested". See docs/API-REALITY.md.
+    #:
+    #: shipzil refuses an explicit key rather than accepting one it cannot
+    #: honour. Silently dropping it would be the exact failure this library
+    #: exists to surface.
+    supports_idempotency_key: bool = False
+
     @abstractmethod
     def rate_single(self, shipment: Shipment) -> Quote:
         """Rate a shipment containing exactly one parcel.
@@ -73,8 +89,18 @@ class Adapter(ABC):
         )
 
     @abstractmethod
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str) -> Label:
-        """Purchase postage. Must be safe to call twice with the same key."""
+    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+        """Purchase postage.
+
+        `idempotency_key` is only ever non-None when
+        `supports_idempotency_key` is True; the client enforces that. Adapters
+        that cannot honour a key receive None so the parameter can never be
+        accepted and quietly discarded.
+
+        No adapter may retry a purchase. Every implementation passes
+        `retries=0`, because a repeat without provider-side deduplication risks
+        buying postage twice.
+        """
 
     def void(self, label: Label) -> bool:
         """Refund/cancel an unused label."""

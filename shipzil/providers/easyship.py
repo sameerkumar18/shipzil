@@ -168,13 +168,17 @@ class EasyshipAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
         """Create the shipment, then request its label synchronously.
 
         Easyship separates the two: `POST /shipments` then
         `POST /shipments/{id}/labels`, which the docs describe as retrieving the
         label synchronously. The batch endpoint is the asynchronous one and is
         deliberately unused.
+        
+        Easyship has no idempotency header, so the key is always None. It is
+        structurally protected instead: a second label request for the same
+        shipment id is refused with "labels already requested".
         """
         parcel = shipment.parcels[0]
         service_id = (rate.service_code or "").strip()

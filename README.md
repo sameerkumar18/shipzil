@@ -183,6 +183,11 @@ decision before the network call, not after. Errors are typed but keep the
 provider's original message, which on three of these surfaces is the only place
 the real failure ever appears.
 
+Purchases are never retried, on any provider. Where the provider enforces an
+idempotency key shipzil sends one; where it publishes no such header shipzil
+refuses the key rather than accepting it and hoping. `adapter.supports_idempotency_key`
+tells you which world you are in before you buy anything.
+
 ```python
 client = shipzil.Client(adapter, max_spend="50", dry_run=True)
 ```
@@ -203,14 +208,12 @@ Shipped:
 - Easyship, including item-to-box packing
 - Multi-parcel emulation for the four surfaces that lack it
 - Buy and void, spend limits, `dry_run`
-- 50 tests, including parser tests against captured real payloads
+- Honest idempotency: EasyPost enforces a key, and the three providers that
+  publish no such header refuse one instead of silently discarding it
+- 54 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 
-- **Real idempotency across all providers.** Today only EasyPost sends the key
-  on the wire. The others accept the argument and drop it, which is exactly the
-  kind of quiet lie this library exists to prevent. Either it gets sent or the
-  adapter says it can't.
 - **ShipStation v1**, the last unbuilt surface. Poor rate shape, single-parcel
   only, but a lot of ShipStation users are still on it.
 - **PyPI release** as v0.2.0, so the install instructions above get shorter.

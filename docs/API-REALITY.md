@@ -221,6 +221,47 @@ top-level `courier_name` — that field exists and is `null`.
 `shipping_settings.units = {weight: "kg", dimensions: "cm"}`, unlike the others
 which take units inline per field or fix them per endpoint.
 
+## Idempotency: one provider out of four
+
+Checked against provider documentation rather than assumed, because the first
+version of shipzil accepted an `idempotency_key` on all four adapters and only
+EasyPost put it on the wire. The other three took the argument and dropped it,
+which is worse than not offering it: the caller believes a repeat purchase is
+safe when nothing enforces that.
+
+| Provider | Client-supplied key? | What actually protects you |
+|---|---|---|
+| EasyPost | **Yes**, `Idempotency-Key` header on `POST /shipments/{id}/buy` | provider-side deduplication |
+| Shippo | No | nothing beyond not retrying |
+| ShipStation v2 | No | nothing beyond not retrying |
+| Easyship | No | structural: a shipment's label can only be bought once |
+
+Notes on the three that lack a key:
+
+* **Shippo** documents no idempotency header on `/transactions`. Searching for
+  one surfaces only their *internal* billing-reconciliation design, which
+  dedupes carrier invoice charges and has nothing to do with the public API.
+  The documented request body is `rate`, `async`, `label_file_type`, `metadata`,
+  `order`. `metadata` is free-form and is **not** a deduplication key, so
+  putting a key there would look like protection while providing none.
+* **ShipStation v2 / ShipEngine** states plainly: "There are two HTTP headers
+  that you need to set in your request" — `API-Key` and `Content-Type`.
+* **Easyship** has no header, but is protected by its two-step model. A second
+  `POST /shipments/{id}/labels` for the same shipment returns
+  `Shipments not found or labels already requested: ESHK…`. So a duplicate label
+  call fails loudly instead of double-charging. Related trap from the same
+  thread: `buy_label_synchronous: true` on shipment creation buys the label at
+  creation time, so a follow-up label call then reports "already requested."
+  shipzil does not set that flag.
+
+shipzil's resolution is to refuse rather than pretend. `Adapter.supports_idempotency_key`
+is True only for EasyPost. Pass an explicit key to any other provider and the
+client raises `CapabilityError` naming the provider and telling you to omit the
+key if the weaker guarantee is acceptable. No adapter retries a purchase
+(`retries=0` everywhere), which covers the common duplicate-charge case, but
+that is not the same thing as provider-side deduplication and shipzil does not
+conflate the two.
+
 ## Sync vs async — verified from docs, per operation
 
 The library is synchronous throughout. Where a provider is genuinely async, it

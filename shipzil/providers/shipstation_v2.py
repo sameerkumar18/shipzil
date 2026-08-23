@@ -200,11 +200,14 @@ class ShipStationV2Adapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
         """Purchase from a previously returned `rate_id`.
 
         Never exercised against live credentials in this repo's test suite: the
         only ShipStation keys available are production.
+        
+        ShipStation v2 documents exactly two headers (API-Key, Content-Type),
+        so the key is always None here and the only protection is retries=0.
         """
         raw = rate.raw if isinstance(rate.raw, dict) else {}
         rate_id = raw.get("rate_id")

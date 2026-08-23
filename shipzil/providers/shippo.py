@@ -160,7 +160,12 @@ class ShippoAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+        """Purchase postage.
+
+        Shippo documents no idempotency header on /transactions, so the key
+        is always None here and the only protection is retries=0.
+        """
         raw = rate.raw if isinstance(rate.raw, dict) else {}
         rate_id = raw.get("object_id")
         if not rate_id:

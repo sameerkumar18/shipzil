@@ -44,6 +44,8 @@ class EasyPostCapabilities(Capabilities):
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
+    # Honours a client-supplied Idempotency-Key on POST /shipments/{id}/buy.
+    supports_idempotency_key = True
     capabilities = EasyPostCapabilities()
 
     def __init__(self, api_key: str, *, timeout: float = 60.0):
@@ -124,7 +126,7 @@ class EasyPostAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
         raw = rate.raw if isinstance(rate.raw, dict) else {}
         shipment_id = raw.get("shipment_id") or raw.get("_container_id")
         rate_id = raw.get("id")
@@ -138,13 +140,18 @@ class EasyPostAdapter(Adapter):
         _status, body = request(
             "POST",
             f"{BASE}/shipments/{shipment_id}/buy",
-            headers={**self._headers, "Idempotency-Key": idempotency_key},
+            headers=self._buy_headers(idempotency_key),
             json={"rate": {"id": rate_id}},
             timeout=self.timeout,
             provider=self.name,
             retries=0,  # never blind-retry a purchase
         )
         return self._label(body)
+
+    def _buy_headers(self, idempotency_key: str | None) -> dict[str, str]:
+        if idempotency_key:
+            return {**self._headers, "Idempotency-Key": idempotency_key}
+        return dict(self._headers)
 
     def void(self, label: Label) -> bool:
         if not label.shipment_id:
