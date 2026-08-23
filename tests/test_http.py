@@ -105,3 +105,54 @@ class TestIdempotencyHonesty:
 
         cls = getattr(providers, name)
         assert self._client(cls)._resolve_idempotency_key(None) is None
+
+
+class TestCredentialGuardsAreBools:
+    """The live-test guards read these without parentheses:
+
+        assert adapter.is_test_key, "refusing to run live tests against production"
+
+    If either ever becomes a plain method again, that expression evaluates a
+    bound method, which is always truthy, and the guard protecting against
+    buying real postage with production credentials silently always passes.
+    mypy does not flag it. These tests exist because that regression was
+    actually introduced once.
+    """
+
+    def test_easypost_is_test_key_is_a_bool_property(self) -> None:
+        from shipzil.providers import EasyPostAdapter
+
+        assert EasyPostAdapter("EZTKtest").is_test_key is True
+        assert EasyPostAdapter("EZAKlive").is_test_key is False
+        assert isinstance(EasyPostAdapter("EZAKlive").is_test_key, bool)
+
+    def test_shippo_is_test_token_is_a_bool_property(self) -> None:
+        from shipzil.providers import ShippoAdapter
+
+        assert ShippoAdapter("shippo_test_x").is_test_token is True
+        assert ShippoAdapter("shippo_live_x").is_test_token is False
+        assert isinstance(ShippoAdapter("shippo_live_x").is_test_token, bool)
+
+    def test_a_production_key_cannot_pass_the_guard(self) -> None:
+        """The exact expression the live tests use, against a production key."""
+        from shipzil.providers import EasyPostAdapter, ShippoAdapter
+
+        assert not EasyPostAdapter("EZAKlive").is_test_key
+        assert not ShippoAdapter("shippo_live_x").is_test_token
+
+    def test_is_test_mode_is_three_state_across_adapters(self) -> None:
+        from shipzil.providers import (
+            EasyPostAdapter,
+            EasyshipAdapter,
+            ShippoAdapter,
+            ShipStationV1Adapter,
+            ShipStationV2Adapter,
+        )
+
+        assert EasyPostAdapter("EZTKtest").is_test_mode() is True
+        assert ShippoAdapter("shippo_test_x").is_test_mode() is True
+        assert EasyshipAdapter("sand_x").is_test_mode() is True
+        assert ShipStationV1Adapter("k", "s", test_labels=True).is_test_mode() is True
+        assert ShipStationV1Adapter("k", "s", test_labels=False).is_test_mode() is False
+        # v2 keys carry no marker. None, not False: shipzil cannot tell.
+        assert ShipStationV2Adapter("k").is_test_mode() is None

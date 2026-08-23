@@ -113,13 +113,16 @@ class ShipStationV1Adapter(Adapter):
             "Accept": "application/json",
         }
 
-    def is_test_credential(self) -> bool:
-        """v1 has no test-key prefix; there is no way to tell from the key.
+    def is_test_mode(self) -> bool | None:
+        """v1 keys carry no test marker, so the credential itself is opaque.
 
-        This is why `test_labels` defaults to True instead of relying on
-        credential inspection the way the EasyPost and Shippo adapters can.
+        The `test_labels` flag is decisive though: it is what shipzil sends as
+        `testLabel`, and a test response is unmistakable — `shipmentId: -1`,
+        `trackingNumber: "99999999999999999999"`, `shipmentCost: 0.0`. So this
+        reports the flag rather than a guess about the credential, and that is
+        why `test_labels` defaults to True.
         """
-        return False
+        return self.test_labels
 
     # ── carriers ────────────────────────────────────────────────────
 
@@ -354,8 +357,16 @@ class ShipStationV1Adapter(Adapter):
         return self._label(body, rate)
 
     def _label(self, body: Any, rate: Rate) -> Label:
+        """A test label is unmistakable in the response, and is marked as such.
+
+        Confirmed live with `testLabel: true`: `shipmentId: -1`,
+        `trackingNumber: "99999999999999999999"`, `shipmentCost: 0.0`. The
+        amount reported is what was actually charged, which for a test label is
+        zero and not the quoted rate — `rate.amount` still holds the quote.
+        """
         data = body if isinstance(body, dict) else {}
         cost = data.get("shipmentCost")
+        shipment_id = data.get("shipmentId")
         return Label(
             tracking_number=str(data.get("trackingNumber") or ""),
             # v1 returns the label as base64 in `labelData`, not a URL.
@@ -365,6 +376,8 @@ class ShipStationV1Adapter(Adapter):
             amount=Decimal(str(cost)) if cost is not None else rate.amount,
             currency=None,
             provider=self.name,
+            shipment_id="" if shipment_id is None else str(shipment_id),
+            is_test=self.test_labels,
             raw={
                 **data,
                 "_test_label": self.test_labels,
@@ -376,6 +389,15 @@ class ShipStationV1Adapter(Adapter):
     def void(self, label: Label) -> bool:
         raw = label.raw if isinstance(label.raw, dict) else {}
         shipment_id = raw.get("shipmentId")
+        # A test label has shipmentId -1 because no shipment record exists.
+        # Sending that to voidlabel is a guaranteed pointless failure, so refuse
+        # locally and say why rather than letting the provider reject it.
+        if label.is_test or shipment_id == -1:
+            raise LabelPurchaseError(
+                "this is a test label (shipmentId -1); there is no shipment to void. "
+                "Test labels are not purchased, so nothing needs refunding.",
+                provider=self.name,
+            )
         if shipment_id is None:
             raise LabelPurchaseError(
                 "this label has no shipstation v1 shipmentId and cannot be voided",

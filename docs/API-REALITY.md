@@ -264,8 +264,30 @@ production, `ShipStationV1Adapter(test_labels=True)` is the **default**, and v1
 has no key prefix to detect test mode from, unlike EasyPost's `EZTK` or Shippo's
 `shippo_test_`. `is_test_credential()` therefore returns False always.
 
-Not yet exercised live: doing so on production credentials risks a real postage
-charge if `testLabel` is ever ignored rather than honoured.
+**Now exercised live, and honoured.** A `testLabel: true` purchase against
+production credentials returned:
+
+```
+shipmentId      -1
+trackingNumber  "99999999999999999999"
+shipmentCost    0.0
+```
+
+No charge: both carriers' `balance` read 0.0 before and after. Those three
+markers are unmistakable, which is why `Label.is_test` is a first-class field.
+
+Two consequences the first implementation got wrong:
+
+* **A test label cannot be voided.** `shipmentId` is `-1` because no shipment
+  record exists, so `POST /shipments/voidlabel` would be a guaranteed failure.
+  shipzil refuses locally and explains that nothing was purchased.
+* **`shipmentCost` on the response is 0.0, not the quote.** `Label.amount`
+  reports what was charged, which is zero; the quoted price stays on the `Rate`.
+  Substituting the quote would misrepresent a free call as a spend.
+
+A useful safety property of this particular account: both carriers have
+`requiresFundedAccount: true` with a zero balance, so even a genuinely
+mishandled `testLabel` would fail for insufficient funds rather than spend.
 
 ### One nice cross-surface detail
 
@@ -273,6 +295,22 @@ v1's `/carriers` reports `shippingProviderId: 30718` for Stamps.com. That is the
 same id that appears in ShipStation **v2**'s exclusion text, "carrier 30718 does
 not support multipackage" — the two APIs share underlying carrier provider ids,
 which makes v1 and v2 responses correlatable.
+
+## Test mode is knowable on four surfaces out of five
+
+| Provider | How | Value |
+|---|---|---|
+| EasyPost | key prefix `EZTK` vs `EZAK` | True / False |
+| Shippo | token prefix `shippo_test_` | True / False |
+| Easyship | sandbox is a separate host, chosen at construction | True / False |
+| ShipStation v1 | no key marker, but `testLabel` is explicit | True / False |
+| ShipStation v2 | **no marker of any kind** | None |
+
+`Adapter.is_test_mode()` returns `bool | None`, and `Label.is_test` carries it
+through. None means shipzil cannot tell, which is deliberately not False —
+reporting False would assert "this is a real purchase" on no evidence.
+
+A dry run always reports `is_test=True`, since it never reached the network.
 
 ## Idempotency: one provider out of four
 

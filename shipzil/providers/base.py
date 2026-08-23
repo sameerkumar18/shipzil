@@ -88,6 +88,15 @@ class Adapter(ABC):
             f"{self.name} cannot rate multiple parcels natively; the client will fan out"
         )
 
+    def is_test_mode(self) -> bool | None:
+        """Whether this adapter is operating against test credentials.
+
+        Returns None when the provider gives no way to tell. Reporting False in
+        that case would assert "these are production credentials" on no evidence,
+        so the uncertainty is passed through to `Label.is_test` instead.
+        """
+        return None
+
     @abstractmethod
     def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
         """Purchase postage.

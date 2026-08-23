@@ -113,13 +113,14 @@ against live credentials on all five surfaces. Purchasing is not:
 | EasyPost | live-verified | live-verified (test key) |
 | Shippo | live-verified | live-verified (test token, buy and void) |
 | ShipStation v2 | live-verified | **never run live** — production keys only |
-| ShipStation v1 | live-verified | **never run live** — production keys only |
+| ShipStation v1 | live-verified | live-verified via `testLabel` (no charge) |
 | Easyship | live-verified | **never run live** — sandbox quota spent |
 
-ShipStation v1 does accept `testLabel: true`, which returns a label without
-buying postage, and the adapter defaults to it. That still hasn't been exercised,
-because on production credentials a flag that turns out to be ignored costs real
-money.
+ShipStation v1's purchase path was verified through `testLabel: true`, which
+returns a real label response without buying postage — confirmed by an unchanged
+account balance. Every `Label` carries `is_test`, which is `True`, `False`, or
+`None` when the provider gives shipzil no way to tell (ShipStation v2 is the
+only such case). A dry run always reports `True`.
 
 ## What "honest" means here concretely
 
@@ -228,7 +229,7 @@ Shipped:
   no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 61 tests, including parser tests against captured real payloads
+- 68 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 

@@ -88,6 +88,10 @@ class EasyshipAdapter(Adapter):
     def _url(self, path: str) -> str:
         return f"{self.base}/{API_VERSION}{path}"
 
+    def is_test_mode(self) -> bool | None:
+        """Determinable: sandbox is a separate host, selected at construction."""
+        return self.sandbox
+
     def item_categories(self) -> list[str]:
         """Valid category slugs for this account."""
         _status, body = request(
@@ -237,6 +241,7 @@ class EasyshipAdapter(Adapter):
             amount=rate.amount,
             currency=rate.currency,
             provider=self.name,
+            is_test=self.is_test_mode(),
             shipment_id=str(record.get("easyship_shipment_id") or fallback_id),
             raw=body,
         )

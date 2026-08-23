@@ -104,6 +104,8 @@ class Client:
                 amount=rate.amount,
                 currency=rate.currency,
                 provider=self.adapter.name,
+                # Not a guess: a dry run never reached the network.
+                is_test=True,
                 raw={"dry_run": True, "rate": rate.raw},
             )
 

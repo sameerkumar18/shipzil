@@ -62,6 +62,10 @@ class ShippoAdapter(Adapter):
         self.timeout = timeout
         self._headers = {"Authorization": f"ShippoToken {api_token}"}
 
+    def is_test_mode(self) -> bool | None:
+        """Determinable: Shippo prefixes test tokens with shippo_test_."""
+        return self.is_test_token
+
     @property
     def is_test_token(self) -> bool:
         return self.api_token.startswith("shippo_test_")
@@ -197,6 +201,7 @@ class ShippoAdapter(Adapter):
             amount=rate.amount,
             currency=rate.currency,
             provider=self.name,
+            is_test=self.is_test_mode(),
             shipment_id=str(body.get("object_id") or ""),
             raw=body,
         )

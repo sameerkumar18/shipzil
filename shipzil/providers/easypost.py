@@ -57,6 +57,10 @@ class EasyPostAdapter(Adapter):
         token = base64.b64encode(f"{api_key}:".encode()).decode()
         self._headers = {"Authorization": f"Basic {token}"}
 
+    def is_test_mode(self) -> bool | None:
+        """Determinable: EasyPost prefixes test keys with EZTK."""
+        return self.is_test_key
+
     @property
     def is_test_key(self) -> bool:
         """EZTK prefixes test keys, EZAK production."""
@@ -262,6 +266,7 @@ class EasyPostAdapter(Adapter):
             amount=Decimal(str(selected.get("rate") or "0")),
             currency=selected.get("currency"),
             provider=self.name,
+            is_test=self.is_test_mode(),
             shipment_id=str(body.get("id") or ""),
             raw=body,
         )

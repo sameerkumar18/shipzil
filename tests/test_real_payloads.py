@@ -200,4 +200,54 @@ class TestShipStationV1RealRates:
 
     def test_test_labels_default_on_because_creds_are_production(self) -> None:
         assert self._adapter().test_labels is True
-        assert self._adapter().is_test_credential() is False
+        # The credential itself is opaque; the flag is what makes it a test.
+        assert self._adapter().is_test_mode() is True
+
+
+class TestShipStationV1TestLabel:
+    """Captured from a real `testLabel: true` call against production creds.
+
+    The markers below are what make a test label safe to recognise, and are the
+    reason `Label.is_test` exists as a first-class field rather than something
+    you dig out of `raw`.
+    """
+
+    def test_response_carries_unmistakable_test_markers(self) -> None:
+        data = load("ss1_testlabel.json")
+        assert data["shipmentId"] == -1, "a test label creates no shipment record"
+        assert data["trackingNumber"] == "9" * 20, "placeholder tracking number"
+        assert float(data["shipmentCost"]) == 0.0, "nothing was charged"
+
+    def test_label_marks_itself_as_test_and_reports_zero_charge(self) -> None:
+        from decimal import Decimal
+
+        from shipzil.models import Rate, Strategy
+        from shipzil.providers import ShipStationV1Adapter
+
+        adapter = ShipStationV1Adapter("k", "s", test_labels=True)
+        quote = Rate(
+            carrier="stamps_com",
+            service="USPS Media Mail",
+            amount=Decimal("4.39"),
+            provider="shipstation_v1",
+            strategy=Strategy.NATIVE,
+        )
+        label = adapter._label(load("ss1_testlabel.json"), quote)
+        assert label.is_test is True
+        assert label.shipment_id == "-1"
+        # The charge, not the quote. The quote is still on the Rate.
+        assert label.amount == Decimal("0.0")
+        assert quote.amount == Decimal("4.39")
+
+    def test_voiding_a_test_label_is_refused_locally(self) -> None:
+        from decimal import Decimal
+
+        from shipzil.errors import LabelPurchaseError
+        from shipzil.models import Rate
+        from shipzil.providers import ShipStationV1Adapter
+
+        adapter = ShipStationV1Adapter("k", "s", test_labels=True)
+        rate = Rate(carrier="stamps_com", service="x", amount=Decimal(1), provider="shipstation_v1")
+        label = adapter._label(load("ss1_testlabel.json"), rate)
+        with pytest.raises(LabelPurchaseError, match="no shipment to void"):
+            adapter.void(label)

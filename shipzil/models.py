@@ -258,7 +258,15 @@ class Quote:
 
 @dataclass(frozen=True, slots=True)
 class Label:
-    """A purchased label."""
+    """A purchased label.
+
+    `is_test` exists because a test label and a real one are otherwise
+    indistinguishable without inspecting `raw`, and mistaking one for the other
+    means either a parcel that never ships or a charge nobody expected. It is
+    deliberately three-state: True means definitely not a real purchase, False
+    means definitely real, and **None means shipzil cannot tell** — which is the
+    case for any provider whose credentials carry no test marker.
+    """
 
     tracking_number: str
     label_url: str
@@ -268,5 +276,7 @@ class Label:
     currency: str | None = None
     provider: str = ""
     shipment_id: str = ""
+    #: True = test label, False = real purchase, None = undeterminable.
+    is_test: bool | None = None
     parcel_labels: tuple[Label, ...] = field(default=())
     raw: Any = None

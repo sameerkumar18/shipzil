@@ -85,6 +85,10 @@ class ShipStationV2Adapter(Adapter):
 
     # ── rating ──────────────────────────────────────────────────────
 
+    def is_test_mode(self) -> bool | None:
+        """Not determinable: v2 API keys carry no test/live marker."""
+        return None
+
     def rate_single(self, shipment: Shipment) -> Quote:
         return self._rate(shipment)
 
@@ -254,6 +258,7 @@ class ShipStationV2Adapter(Adapter):
             amount=Decimal(str(cost.get("amount") or 0)),
             currency=currency.upper() if isinstance(currency, str) else None,
             provider=self.name,
+            is_test=self.is_test_mode(),
             shipment_id=str(body.get("label_id") or ""),
             raw=body,
         )
