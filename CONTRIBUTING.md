@@ -133,3 +133,29 @@ both credential checks return `bool`. Do not remove it.
 Where a provider offers a no-charge purchase path, use it and default to it:
 ShipStation v1 has `testLabel: true`, and the adapter defaults it on because the
 only v1 credentials that exist in practice are production.
+
+## Hazmat, and capability honesty
+
+If you add a provider that carries hazmat, declare exactly what it can take in
+`Adapter.hazmat_fields`, read from its OpenAPI specification rather than its
+prose docs. `Client` calls `hazmat_fidelity_gap()` on every quote, so anything a
+caller declares that your provider cannot carry is reported automatically.
+
+**Claim less rather than more.** An over-claimed field means a hazmat parcel
+ships under-declared and looks like a success, with the liability sitting on the
+shipper. `EasyPostAdapter.hazmat_fields` is deliberately empty because its
+documentation has not been consulted, not because EasyPost lacks support.
+
+Hazmat changes which rates come back, not only the price: a declared lithium
+battery takes Shippo from 11 rates to 3, all USPS. Never quote without passing
+the declaration through.
+
+## `str.replace` fails silently
+
+Several bugs in this repository's history came from an edit whose anchor did not
+match, so the replacement quietly did nothing and the code kept its old
+behaviour. `Rate.surcharges` was "added" twice before anyone noticed the first
+attempt had anchored on a method that lives on `Quote`.
+
+If you script an edit, assert the anchor exists first. The tests are the real
+safety net, but an assertion turns a silent no-op into an immediate failure.

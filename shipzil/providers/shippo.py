@@ -29,6 +29,7 @@ from ..models import (
     Exclusion,
     ExclusionCode,
     Label,
+    LithiumBatteryPacking,
     Parcel,
     Quote,
     Rate,
@@ -51,6 +52,12 @@ class ShippoCapabilities(Capabilities):
 
 class ShippoAdapter(Adapter):
     name = "shippo"
+    # extra.dangerous_goods{contains, lithium_batteries, biological_material},
+    # extra.dry_ice{contains_dry_ice, weight}, extra.alcohol{contains_alcohol,
+    # recipient_type}. No UN number, class or packing group anywhere.
+    hazmat_fields = frozenset(
+        {"lithium_batteries", "biological_material", "dry_ice", "contains_alcohol"}
+    )
     capabilities = ShippoCapabilities()
 
     def __init__(self, api_token: str, *, timeout: float = 90.0):
@@ -86,6 +93,7 @@ class ShippoAdapter(Adapter):
                 "parcels": [_parcel(parcel)],
                 # Synchronous by explicit request; Shippo defaults to async.
                 "async": False,
+                **({"extra": extra} if (extra := self._extra(shipment, parcel)) else {}),
             },
             timeout=self.timeout,
             provider=self.name,
@@ -139,6 +147,43 @@ class ShippoAdapter(Adapter):
                 Exclusion(code=code, message=text, carrier=carrier, source="shipzil")
             )
         return out
+
+    @staticmethod
+    def _extra(shipment: Shipment, parcel: Parcel) -> dict[str, Any]:
+        """Shippo puts hazmat on the shipment's `extra`, not on the parcel.
+
+        Its own note: dangerous-goods contents restrict eligibility to certain
+        USPS service levels, so this changes *which rates come back*, not only
+        the price. Omitting it silently produces a rate the carrier will refuse.
+        """
+        extra: dict[str, Any] = {}
+        dg = parcel.dangerous_goods
+        if dg is not None and dg.contains:
+            goods: dict[str, Any] = {"contains": True}
+            if dg.lithium_batteries is not LithiumBatteryPacking.NONE:
+                # Shippo has one boolean; the PI966/PI967 distinction is lost
+                # here, which the adapter reports via _hazmat_fidelity_gap.
+                goods["lithium_batteries"] = {"contains": True}
+            if dg.biological_material:
+                goods["biological_material"] = {"contains": True}
+            extra["dangerous_goods"] = goods
+            if dg.dry_ice is not None and dg.dry_ice.contains:
+                # Kilograms only, and must not exceed the parcel weight.
+                extra["dry_ice"] = {
+                    "contains_dry_ice": True,
+                    "weight": str(dg.dry_ice.weight.to("kg")),
+                }
+            if dg.contains_alcohol:
+                alcohol: dict[str, Any] = {"contains_alcohol": True}
+                if dg.alcohol_recipient:
+                    alcohol["recipient_type"] = dg.alcohol_recipient
+                extra["alcohol"] = alcohol
+        if parcel.insured_value is not None:
+            extra["insurance"] = {
+                "amount": str(parcel.insured_value),
+                "currency": "USD",
+            }
+        return extra
 
     def _parse_rate(self, data: dict[str, Any], *, shipment_id: str) -> Rate:
         raw = dict(data)
@@ -264,6 +309,13 @@ def _address(addr: Address) -> dict[str, Any]:
         out["phone"] = addr.phone
     if addr.email:
         out["email"] = addr.email
+    if addr.street3:
+        out["street3"] = addr.street3
+    residential = addr.residential
+    if residential is not None:
+        # Omitted when unknown. Sending False would assert "commercial" and
+        # understate the quote by the residential surcharge, ~$6 on UPS.
+        out["is_residential"] = residential
     return out
 
 
@@ -272,6 +324,12 @@ def _parcel(parcel: Parcel) -> dict[str, Any]:
     assert weight is not None  # guarded by _dimension_gap
     # Shippo wants strings, and a unit per field rather than per request.
     out: dict[str, Any] = {"weight": str(weight.to("oz")), "mass_unit": "oz"}
+    if parcel.packaging is not None:
+        # ParcelCreateFromTemplateRequest: template + weight only. Shippo's
+        # schema requires the dimension fields to be EMPTY here, so returning
+        # early is required, not merely tidy.
+        out["template"] = parcel.packaging.code
+        return out
     if parcel.dimensions is not None:
         length, width, height = parcel.dimensions.to("in")
         out |= {

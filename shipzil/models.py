@@ -16,16 +16,216 @@ from .units import Dimensions, Weight
 
 __all__ = [
     "Address",
+    "AddressClass",
+    "DangerousGoods",
+    "DryIce",
+    "DutiesPaidBy",
     "Exclusion",
     "ExclusionCode",
     "Item",
     "Label",
+    "LithiumBatteryPacking",
+    "PackagingTemplate",
     "Parcel",
     "Quote",
     "Rate",
+    "RegulationLevel",
     "Shipment",
     "Strategy",
+    "TrackingLeg",
 ]
+
+
+class AddressClass(str, Enum):
+    """What kind of place an address is.
+
+    Not a boolean, deliberately. Shippo's v2 address model replaced its boolean
+    `is_residential` with an enum precisely because PO boxes and military
+    addresses are neither residential nor commercial, and a boolean silently
+    mislabels them.
+
+    `UNKNOWN` is the default and is **not** the same as `COMMERCIAL`. Sending
+    "commercial" on a caller's silence is a claim shipzil has no basis for, and
+    it is worth roughly $6 per parcel: UPS charges a residential surcharge of
+    $6.60 in the US, and Easyship reports `residential_full_fee` around 6.15.
+    """
+
+    UNKNOWN = "unknown"
+    RESIDENTIAL = "residential"
+    COMMERCIAL = "commercial"
+    PO_BOX = "po_box"
+    MILITARY = "military"
+
+
+class DutiesPaidBy(str, Enum):
+    """Who settles import duty and tax. An incoterm, narrowed to the choice.
+
+    shipzil used to hardcode DDU, which silently made the *recipient* liable for
+    duty on every international shipment. That is a commercial decision and it
+    belongs to the caller.
+
+    `UNSPECIFIED` sends nothing and lets the provider apply its own default,
+    which is the only honest behaviour when the caller has not said.
+    """
+
+    UNSPECIFIED = "unspecified"
+    #: DDU / DAP — recipient pays duty and tax on arrival.
+    RECIPIENT = "recipient"
+    #: DDP — shipper pays duty and tax, so the buyer sees a landed cost.
+    SENDER = "sender"
+
+
+class LithiumBatteryPacking(str, Enum):
+    """IATA packing instruction for lithium cells. Not interchangeable.
+
+    PI966 and PI967 carry different labelling and documentation duties, so a
+    single "contains batteries" boolean is not a lawful substitute. Easyship is
+    the only provider that models the distinction, per item.
+    """
+
+    NONE = "none"
+    #: PI966 — batteries packed *with* equipment, shipped alongside it.
+    PACKED_WITH_EQUIPMENT = "pi966"
+    #: PI967 — batteries *contained in* equipment.
+    CONTAINED_IN_EQUIPMENT = "pi967"
+
+
+class RegulationLevel(str, Enum):
+    """How heavily regulated a dangerous good is. ShipEngine's vocabulary."""
+
+    LIMITED_QUANTITIES = "limited_quantities"
+    EXCEPTED_QUANTITY = "excepted_quantity"
+    LIGHTLY_REGULATED = "lightly_regulated"
+    FULLY_REGULATED = "fully_regulated"
+
+
+@dataclass(frozen=True)
+class DryIce:
+    """Dry ice, which is itself a dangerous good (UN1845).
+
+    `weight` is required whenever dry ice is present: Shippo marks it mandatory
+    and rejects a weight greater than the parcel weight. Shippo accepts
+    kilograms only while ShipEngine accepts four units, so shipzil holds a
+    `Weight` and converts at each adapter boundary.
+    """
+
+    weight: Weight
+    contains: bool = True
+
+
+@dataclass(frozen=True)
+class DangerousGoods:
+    """A hazmat declaration.
+
+    Providers disagree about where this belongs — ShipEngine puts a full
+    IATA-style declaration on each product, Shippo puts booleans on the
+    shipment, Easyship puts battery flags on each item — so shipzil accepts it
+    per `Parcel` and each adapter maps it to the level its provider expects,
+    reporting an exclusion when the provider cannot carry the detail.
+
+    The regulated fields are optional because the aggregators demand different
+    subsets, but **omitting them does not make a shipment compliant**. A carrier
+    that accepts an undeclared hazmat parcel leaves the liability with the
+    shipper.
+    """
+
+    #: Present at all. Set this even when nothing else is known.
+    contains: bool = True
+    lithium_batteries: LithiumBatteryPacking = LithiumBatteryPacking.NONE
+    biological_material: bool = False
+    contains_liquids: bool = False
+    #: FedEx and UPS only, and FedEx additionally requires `alcohol_recipient`.
+    contains_alcohol: bool = False
+    #: "licensee" or "consumer". Mandatory for FedEx when alcohol is present.
+    alcohol_recipient: Literal["licensee", "consumer"] | None = None
+    dry_ice: DryIce | None = None
+
+    # ── the fully regulated fields (ShipEngine per-product) ──────────
+    #: UN number, e.g. "UN3481".
+    un_number: str | None = None
+    #: Proper shipping name, e.g. "Lithium ion batteries packed with equipment".
+    shipping_name: str | None = None
+    technical_name: str | None = None
+    #: Hazard class, e.g. "9".
+    hazard_class: str | None = None
+    #: Packing group I, II or III.
+    packing_group: Literal["i", "ii", "iii"] | None = None
+    #: e.g. "PI966".
+    packing_instruction: str | None = None
+    regulation_level: RegulationLevel | None = None
+    #: IATA, DOT, ADR…
+    regulation_authority: str | None = None
+    #: ground | water | cargo_aircraft_only | passenger_aircraft
+    transport_mode: str | None = None
+    radioactive: bool = False
+    reportable_quantity: bool = False
+    #: Required by several carriers whenever hazmat is present.
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+
+    @property
+    def is_fully_declared(self) -> bool:
+        """Whether the regulated fields a fully-regulated shipment needs are set.
+
+        Deliberately not enforced: plenty of hazmat ships under limited or
+        excepted quantity with far less paperwork. It exists so an adapter can
+        warn instead of guessing.
+        """
+        return bool(self.un_number and self.hazard_class and self.packing_group)
+
+
+@dataclass(frozen=True)
+class PackagingTemplate:
+    """Carrier-supplied packaging, such as a USPS Flat Rate box.
+
+    A template *replaces* dimensions rather than supplementing them. Shippo
+    enforces this in its schema with two mutually exclusive request bodies: with
+    a template, the dimension fields must be empty. So a `Parcel` carrying a
+    template and no dimensions is correct, not incomplete, and adapters must not
+    demand dimensions for it.
+
+    `code` is the provider's own token and is not portable between providers:
+
+    * Shippo    `USPS_FlatRateEnvelope`, `USPS_MediumFlatRateBox1`, …
+    * ShipEngine `flat_rate_envelope`, `medium_flat_rate_box`, …
+    * Easyship   a box `slug`
+
+    Weight is still required: flat rate has a ceiling, 70 lb on USPS templates.
+    """
+
+    code: str
+    #: Which provider's vocabulary `code` belongs to, so a mismatch can be
+    #: reported rather than silently sent to the wrong API.
+    provider: str | None = None
+
+
+@dataclass(frozen=True)
+class TrackingLeg:
+    """One tracking number. A shipment can have several, for four reasons.
+
+    1. **Legs.** An international shipment handed from one courier to another
+       starts a new leg with its own number (Easyship `trackings[].leg_number`).
+    2. **Pieces.** A multi-piece shipment has a master number plus one per piece
+       (ShipEngine `packages[].tracking_number`; UPS allows up to 20).
+    3. **Network handoff.** Ground Saver and similar keep one number across two
+       networks.
+    4. **Aliases.** DHL eCommerce adds `local` and `alternate` numbers for the
+       same package.
+
+    Collapsing these to a single string, which shipzil did, loses every leg after
+    the first.
+    """
+
+    tracking_number: str
+    #: 1-based. Increments when the shipment passes to a new courier.
+    leg_number: int = 1
+    #: The carrier actually moving the parcel on this leg.
+    handler: str | None = None
+    #: Position within a multi-piece shipment, when applicable.
+    piece: int | None = None
+    #: Carrier-internal aliases for the same movement.
+    local_tracking_number: str | None = None
+    alternate_tracking_number: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,7 +242,26 @@ class Address:
     company: str | None = None
     phone: str | None = None
     email: str | None = None
-    residential: bool | None = None
+    #: ShipStation v1 accepts `street3` and Easyship accepts `line_3`.
+    street3: str | None = None
+    #: What kind of place this is. Drives residential surcharges, which are
+    #: real money — roughly $6/parcel on UPS. Defaults to UNKNOWN, which is sent
+    #: as "unknown" where the provider has that value and omitted otherwise.
+    #: It is never silently downgraded to "commercial".
+    address_class: AddressClass = AddressClass.UNKNOWN
+
+    @property
+    def residential(self) -> bool | None:
+        """Tri-state view of `address_class`, for providers that take a boolean.
+
+        None means unknown, and adapters must omit the field rather than send
+        False. Sending False asserts "commercial" on no evidence.
+        """
+        if self.address_class is AddressClass.RESIDENTIAL:
+            return True
+        if self.address_class is AddressClass.COMMERCIAL:
+            return False
+        return None
 
     def __post_init__(self) -> None:
         if len(self.country) != 2:
@@ -96,6 +315,23 @@ class Parcel:
     dimensions: Dimensions | None = None
     items: tuple[Item, ...] = ()
     reference: str | None = None
+    #: Carrier-supplied packaging. Replaces `dimensions`; see PackagingTemplate.
+    packaging: PackagingTemplate | None = None
+    #: Hazmat declaration for this parcel's contents.
+    dangerous_goods: DangerousGoods | None = None
+    #: Value to insure. Distinct from `Item.value`, which is the customs declared
+    #: value, and from any COD amount. Collapsing the three misprices claims.
+    insured_value: Decimal | None = None
+
+    @property
+    def has_dimensions(self) -> bool:
+        """Whether the parcel's size is determined.
+
+        True when dimensions are given **or** a carrier template supplies them.
+        Adapters must use this rather than checking `dimensions` directly, or
+        they will refuse flat-rate shipments the provider would happily quote.
+        """
+        return self.dimensions is not None or self.packaging is not None
 
     def __post_init__(self) -> None:
         if self.weight is None and not self.items:
@@ -131,6 +367,20 @@ class Shipment:
     to_address: Address
     parcels: tuple[Parcel, ...]
     reference: str | None = None
+    #: Who pays import duty and tax. UNSPECIFIED sends nothing, letting the
+    #: provider default. shipzil does not choose a liability model for you.
+    duties_paid_by: DutiesPaidBy = DutiesPaidBy.UNSPECIFIED
+    #: Future-date the label. Manifests are keyed to ship date on ShipEngine.
+    ship_date: str | None = None
+
+    @property
+    def dangerous_goods(self) -> tuple[DangerousGoods, ...]:
+        """Every hazmat declaration across the parcels."""
+        return tuple(p.dangerous_goods for p in self.parcels if p.dangerous_goods)
+
+    @property
+    def is_hazmat(self) -> bool:
+        return bool(self.dangerous_goods)
 
     def __post_init__(self) -> None:
         if not self.parcels:
@@ -177,6 +427,7 @@ class ExclusionCode(str, Enum):
     DIMENSIONS_REQUIRED = "dimensions_required"
     ITEM_CLASSIFICATION_REQUIRED = "item_classification_required"
     ADDRESS_UNSUPPORTED = "address_unsupported"
+    HAZMAT_DETAIL_UNSUPPORTED = "hazmat_detail_unsupported"
     RATE_LIMITED = "rate_limited"
     UNKNOWN = "unknown"
 
@@ -216,7 +467,19 @@ class Rate:
     service_code: str | None = None
     strategy: Strategy = Strategy.NATIVE
     parcel_count: int = 1
+    #: Base carriage before surcharges, when the provider separates it. Easyship
+    #: returns 25 cost components and shipzil previously kept only the total, so
+    #: a 13% gap between carriage and total was invisible.
+    base_amount: Decimal | None = None
+    #: Named surcharge components in the provider's own spelling, e.g.
+    #: ("fuel_surcharge", 3.03). Their sum need not equal amount - base_amount;
+    #: no provider guarantees that, so shipzil does not assert it.
+    surcharges: tuple[tuple[str, Decimal], ...] = ()
     raw: Any = None
+
+    @property
+    def surcharge_total(self) -> Decimal:
+        return sum((v for _, v in self.surcharges), Decimal(0))
 
     @property
     def is_synthesized(self) -> bool:
@@ -278,6 +541,10 @@ class Label:
     shipment_id: str = ""
     #: True = test label, False = real purchase, None = undeterminable.
     is_test: bool | None = None
+    #: Every tracking number this purchase produced. `tracking_number` is the
+    #: first leg; this is the whole set, including later legs after a courier
+    #: handoff and per-piece numbers in a multi-piece shipment.
+    tracking_legs: tuple[TrackingLeg, ...] = ()
     #: One entry per parcel when a single purchase produced several labels.
     #: EasyPost's `POST /orders/{id}/buy` is the case that needs it: it returns
     #: a `shipments` array, each with its own postage label and tracking code.

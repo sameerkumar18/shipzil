@@ -176,6 +176,51 @@ Five providers, five conventions (oz/in, kg/cm, `"ounces"` vs `"ounce"`). Values
 keep the unit you gave them and convert through `Decimal` inside the adapter, so
 nothing drifts.
 
+## Hazmat, duties and address class
+
+These are not optional extras. A declared lithium battery cuts Shippo from 11
+rates to 3, all USPS, because dangerous goods restrict service eligibility. Quote
+without the declaration and 8 of those 11 are rates the carrier will refuse.
+
+```python
+parcel = shipzil.Parcel(
+    weight=shipzil.Weight.of(16, "oz"),
+    dimensions=shipzil.Dimensions.of(10, 8, 4, "in"),
+    dangerous_goods=shipzil.DangerousGoods(
+        lithium_batteries=shipzil.LithiumBatteryPacking.CONTAINED_IN_EQUIPMENT,
+        un_number="UN3481", hazard_class="9", packing_group="ii",
+    ),
+    insured_value=100,
+)
+shipment = shipzil.Shipment(
+    frm, to, (parcel,),
+    duties_paid_by=shipzil.DutiesPaidBy.SENDER,   # DDP. Nothing is assumed.
+)
+```
+
+Providers keep hazmat at three different levels — ShipEngine per product,
+Shippo per shipment, Easyship per item — so anything a provider cannot carry comes
+back as an exclusion instead of being dropped:
+
+```
+hazmat_detail_unsupported [shipzil] — shippo cannot carry these declared hazmat
+details: regulated_detail. They will not reach the carrier, so the shipment may be
+under-declared.
+```
+
+`DutiesPaidBy.UNSPECIFIED` is the default and sends nothing. An earlier version
+hardcoded DDU, which silently made the **recipient** liable for import duty on
+every international shipment.
+
+`Address.address_class` is an enum, not a boolean, because a PO box is neither
+residential nor commercial. Unknown is never downgraded to commercial: on Easyship
+the residential surcharge measures **$6.15 per parcel**, and it is surfaced in
+`Rate.surcharges` alongside fuel and remote-area components rather than buried in
+one total.
+
+Full inventory of what is still missing, taken from the providers' OpenAPI specs:
+[docs/GAPS.md](docs/GAPS.md).
+
 ## Why not just use the provider's own SDK?
 
 Use it, if you are certain you will only ever have one provider. The official
@@ -232,7 +277,7 @@ Shipped:
   no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 69 tests, including parser tests against captured real payloads
+- 98 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 

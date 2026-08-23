@@ -1,0 +1,339 @@
+# Gaps
+
+What shipzil does not model, taken from the providers' own OpenAPI specifications
+rather than their prose documentation. Specs were scraped into `.apidocs/`
+(gitignored) and read directly:
+
+| Provider | Source |
+|---|---|
+| Shippo | `docs.goshippo.com/spec/shippoapi/public-api.yaml`, 938 KB, OpenAPI 3.1 |
+| ShipEngine / ShipStation v2 | `github.com/ShipEngine/shipengine-openapi`, 17 MB, 70 paths, 337 schemas |
+| Easyship | `developers.easyship.com/llms.txt` → 213 reference pages with inline OpenAPI |
+| ShipStation v1 | `shipstation.com/docs/api/*` HTML |
+
+EasyPost is **absent on purpose**: its repositories are off-limits, and I have not
+been given the go-ahead to read `docs.easypost.com` either. Every gap below that
+mentions EasyPost is therefore unverified for that provider.
+
+Ordered by commercial risk, not by effort.
+
+---
+
+## 1. Hazmat and dangerous goods — nothing modelled at all
+
+The largest gap, and the three aggregators disagree profoundly about *where*
+hazmat lives. Any abstraction has to reconcile shipment-level booleans against
+per-item flags against full IATA/DOT declarations.
+
+### ShipEngine — per-product, fully regulated
+
+`packages[].products[].dangerous_goods[]` is a real hazmat declaration, 19 fields:
+
+```
+id_number                       UN number
+shipping_name                   proper shipping name
+technical_name                  chemical name
+product_class                   hazard class
+product_class_subsidiary        secondary hazard
+packaging_group                 i | ii | iii
+packaging_instruction           e.g. PI 965
+packaging_instruction_section   section_1 | section_2 | section_1a | section_1b
+packaging_type
+regulation_authority            IATA, DOT, ADR…
+regulation_level                lightly_regulated | fully_regulated
+                                | limited_quantities | excepted_quantity
+transport_mean                  ground | water | cargo_aircraft_only
+                                | passenger_aircraft
+transport_category
+tunnel_code                     ADR tunnel restriction
+radioactive                     boolean
+reportable_quantity             boolean
+quantity, dangerous_amount, additional_description
+```
+
+Plus shipment-level in `advanced_shipment_options`: `dangerous_goods` (boolean),
+`dangerous_goods_contact {name, phone}`, `dry_ice` (boolean),
+`dry_ice_weight {value, unit}` where unit accepts pound/ounce/gram/kilogram,
+`contains_alcohol`, `regulated_content_type` (`day_old_poultry` |
+`other_live_animal`), `limited_quantity`, `non_machinable`, `fragile`,
+`additional_handling`.
+
+### Shippo — shipment-level `extra`, nested objects
+
+```
+extra.dangerous_goods.contains                            boolean
+extra.dangerous_goods.lithium_batteries.contains          boolean
+extra.dangerous_goods.biological_material.contains        boolean
+extra.dangerous_goods_code                                DHL eCommerce category codes
+extra.dry_ice.contains_dry_ice                            boolean, mandatory
+extra.dry_ice.weight                                      mandatory, KILOGRAMS ONLY,
+                                                          must not exceed parcel weight
+extra.alcohol.contains_alcohol                            boolean, FedEx + UPS only
+extra.alcohol.recipient_type                              licensee | consumer,
+                                                          mandatory for FedEx
+```
+
+Shippo's own note: dangerous-goods contents restrict eligibility to certain USPS
+service levels, so this changes *which rates come back*, not only the price.
+
+### Easyship — per item, and the only one modelling battery packing instructions
+
+```
+parcels[].items[].contains_battery_pi966    batteries PACKED WITH equipment
+parcels[].items[].contains_battery_pi967    batteries CONTAINED IN equipment
+parcels[].items[].contains_liquids
+parcels[].items[].cpsc_compliance           regulated HTS items
+```
+
+PI966 vs PI967 is a real regulatory distinction with different labelling and
+documentation duties. Easyship is the only one of the three that captures it, and
+it is per item, which is the correct granularity.
+
+### ShipStation v1
+
+No hazmat fields found in the scraped documentation. Treat as unsupported.
+
+### Carrier-side, USPS, effective 12 July 2026
+
+A new **Hazmat Handling Fee** on Parcel Select / Priority Express / Priority /
+Ground Advantage, **plus a separate noncompliance fee for improperly prepared
+hazardous material**. Reference Publication 52. Also a new Live-Animal and
+Perishable Handling Fee for Priority Express (DMM 283.1.9).
+
+### Consequence
+
+shipzil cannot ship a battery, an aerosol, a bottle of wine, dry ice or anything
+lightly regulated without silently omitting a legally required declaration. It
+will *appear* to work: the label prints, and the shipper carries the liability.
+
+---
+
+## 2. Hardcoded `incoterms: "DDU"`
+
+`easyship.py` sets DDU in both rating and purchase. DDU means **the recipient pays
+import duty and tax on arrival**. That is a commercial liability decision made
+silently on the caller's behalf.
+
+Easyship supports `DDU`, `DDP` and `null`. Shippo's `incoterm` enum is wider:
+`DDP`, `DDU`, `FCA`, `DAP`, `eDAP`, with carrier restrictions (FCA is DHL Express
+and FedEx only; DAP is DHL Express and DPD UK; eDAP is DPD UK). ShipEngine
+expresses the same idea in at least three places —
+`customs.terms_of_trade_code`, `advanced_options.delivered_duty_paid`, and
+DHL-specific `duties_taxes_paid` / `bill_duties_to_sender` — with no documented
+precedence.
+
+A merchant selling landed-cost DDP gets the wrong duty model *and* a quote missing
+`ddp_handling_fee`.
+
+---
+
+## 3. Residential: dropped on two providers, fabricated on one
+
+| Provider | Field | shipzil today |
+|---|---|---|
+| Shippo | `is_residential`, on **both** addresses | never sent |
+| Easyship | `set_as_residential`, destination only | never sent |
+| ShipStation v1 | `residential` | `bool(None)` → **`False`** |
+| ShipStation v2 | `address_residential_indicator` (`unknown`/`yes`/`no`) | correct |
+| EasyPost | unverified — docs off-limits | sends a boolean |
+
+The v1 line asserts "commercial" when the caller said "unknown". That is inventing
+data, which this library forbids everywhere else.
+
+Cost: UPS US residential surcharge is $6.60 per package. Easyship's own rate
+object returns `residential_full_fee: 6.15`. Omitting the flag understates a quote
+by roughly $6 per parcel, so about $18 on a three-parcel fan-out.
+
+Shippo is mid-migration: v1 `is_residential` (boolean) versus v2 `address_type`
+(`residential` | `commercial` | `unknown` | `po_box` | `military`). A boolean
+cannot express PO Box or military, so a future model should not be boolean.
+
+---
+
+## 4. Predefined and flat-rate packaging
+
+No support for any of:
+
+- Shippo `parcels[].template` — `USPS_FlatRateEnvelope`, `USPS_SmallFlatRateBox`,
+  `USPS_MediumFlatRateBox1/2`, `USPS_LargeFlatRateBox`, `USPS_RegionalRateBoxA1/A2`,
+  `FedEx_Box_Small_1`, and more. Read-only carrier templates are discoverable via
+  `GET /carrier-parcel-templates`, which also exposes `is_variable_dimensions`.
+- ShipEngine `packages[].package_code` — `flat_rate_envelope`,
+  `small/medium/large_flat_rate_box`, `regional_rate_box_a/b`, `letter`,
+  `large_package`, `package`. Discoverable via
+  `GET /v1/carriers/{carrier_id}/packages`.
+- Easyship `box.slug`, discoverable via `GET /2024-09/boxes`. Slugs carry the
+  dimensions, so supplying a slug replaces L/W/H.
+
+**This is not merely a missing feature.** With a template, dimensions must be
+*omitted*: Shippo enforces it schematically with two mutually exclusive request
+bodies — `ParcelCreateFromTemplateRequest` requires `template` + `weight` and the
+dimension fields *must be empty*, while `ParcelCreateRequest` requires them.
+shipzil's `Parcel` cannot express the first, and its dimension pre-flight would
+refuse the shipment. So the "never invent dimensions" rule produces a refusal
+exactly where the provider would quote happily — and Flat Rate is frequently the
+cheapest option, so shipzil systematically returns worse prices than the
+provider's own UI.
+
+Weight is still required either way, because flat rate has a weight ceiling
+(70 lb on every USPS template).
+
+---
+
+## 5. Dimensional weight, oversize and cubic — the concept is absent
+
+No mention of DIM weight, billable weight, girth, oversize or cubic anywhere in
+the project, and `Dimensions` has no maximum validation.
+
+USPS, current:
+
+- Divisor is **139**, changed from 166 on **12 July 2026**.
+- Applies above **1 cubic foot (1,728 in³)**, zones **1–9**, to Priority Express,
+  Priority, **Ground Advantage** and Parcel Select.
+- Each dimension now rounds **up** to the whole inch (previously nearest), which
+  compounds across three dimensions.
+- Nonstandard fees: >22–30in **+$4.50**, >30in **+$10.00**, >2 ft³ **+$21.00**, and
+  a piece can incur both a length and a cube fee.
+- Oversized: length + girth >108in → oversized price **regardless of weight**;
+  maximum 130in.
+- **Dimension Noncompliance Fee $3.00** when dimensions are omitted or inaccurate
+  for Ground Advantage over 1 ft³ or 22in.
+- Cubic pricing rounds **down** to the nearest ¼ inch — opposite direction to DIM.
+- Nonrectangular parcels take a 0.785 adjustment factor.
+
+Three consequences specific to shipzil:
+
+1. **The fan-out sum is wrong in a predictable direction.** The current warning
+   says a carrier "may price a consignment differently from the sum of its parts".
+   With DIM thresholds and oversize bands, three 12in boxes versus one 36in box is
+   deterministic, not probabilistic. The disclosure understates the problem.
+2. **Weight-only parcels are a fee condition, not just a rating limitation.**
+   shipzil permits `Parcel(weight=...)` with no dimensions; USPS charges $3.00 for
+   exactly that on qualifying Ground Advantage parcels.
+3. No girth calculation, so nothing can warn before a carrier reclassifies a piece
+   as oversized.
+
+---
+
+## 6. Multi-tracking: one string where there are four mechanisms
+
+`Label.tracking_number` is a single string, and the Easyship parser `break`s on the
+first leg. Shipments legitimately carry more than one number for four independent
+reasons:
+
+| Mechanism | Shape |
+|---|---|
+| Multi-leg international | Easyship `trackings[]` with `leg_number`; *"if a shipment is passed to a new courier, it begins a new leg"* |
+| Multi-piece (MPS) | ShipEngine `packages[].tracking_number` + `sequence`, master at label level; UPS allows up to 20 |
+| Postal hybrid handoff | usually one number, carrier changes mid-route |
+| Carrier-internal alias | `local_tracking_number`, `alternate_tracking_number` (DHL eCommerce) |
+
+Shippo prints `MSTR` plus a per-parcel number on the label, and the other parcels'
+labels need a second call, `GET /transactions?rate=<rate_object_id>`, which shipzil
+never makes.
+
+---
+
+## 7. Cost breakdown discarded
+
+Easyship returns 25 cost components; `Rate` keeps one number. From a single real
+rate:
+
+```
+shipment_charge         56.12   base
+fuel_surcharge           3.03
+remote_area_surcharge    4.45
+residential_full_fee     6.15
+total_charge            63.60   the only value shipzil keeps
+```
+
+A 13% gap between base and total, entirely surcharges, invisible. That blocks
+answering "why is this $63", comparing base rates across providers, and detecting
+quote-versus-invoice drift.
+
+---
+
+## 8. Insurance and declared value
+
+Not modelled at all. Three distinct values must not be collapsed: **customs
+declared value**, **insured value**, and **COD amount**. `Item.value` is the first
+only.
+
+- Shippo `extra.insurance {amount, content, currency, provider}`; provider defaults
+  to XCover, or `FEDEX`/`UPS`/`ONTRAC` for carrier cover. Also per parcel.
+- ShipEngine `packages[].insured_value {currency, amount}` — per package — plus
+  shipment-level `insurance_provider`.
+- Easyship `insurance {is_insured, insured_amount, insured_currency}`; rate exposes
+  `insurance_fee`.
+
+Coupling worth knowing: declaring ≥$500 insurance with no signature is overridden
+by FedEx to Direct Signature Required. Insurance and signature are not independent.
+
+---
+
+## 9. Everything else, by concept
+
+| Concept | Shippo | ShipEngine | Easyship |
+|---|---|---|---|
+| Signature | `extra.signature_confirmation` (STANDARD/ADULT/CERTIFIED/INDIRECT/CARRIER_CONFIRMATION) | `confirmation` (none/delivery/signature/adult_signature/direct_signature/delivery_mailed/verbal_confirmation) | not found |
+| Authority to leave | `extra.authority_to_leave` | `advanced_options.shipper_release` | not found |
+| Saturday | `extra.saturday_delivery` | `advanced_options.saturday_delivery` | not found |
+| Ship date | `shipment_date` | `ship_date` (manifests are keyed to it) | not confirmed |
+| Pickup vs dropoff | `POST /pickups` (USPS + DHL Express only) | `advanced_options.origin_type` | `rates[].available_handover_options`, `minimum_pickup_fee`, `pickup_state` |
+| Manifest / SCAN | `POST /manifests` | `POST /v1/manifests`, USPS 9pm cutoff | not confirmed |
+| Return label | `extra.is_return`, `extra.rma_number`, `address_return` | `POST /v1/labels/{id}/return`, `charge_event: on_carrier_acceptance`, `rma_number` | `return`, `original_easyship_shipment_id` |
+| Address validation | `GET /addresses/{id}/validate`; v2 `address_type` | `POST /v1/addresses/validate`, `/parse` | implicit for US |
+| Third-party billing | `extra.billing {type, account, country, zip}` (SENDER/RECIPIENT/THIRD_PARTY/THIRD_PARTY_CONSIGNEE/COLLECT) | `advanced_options.bill_to_party` + `bill_to_account` | `courier_settings.courier_account_number` (LYOC) |
+| Published vs negotiated | `extra.request_retail_rates` | `comparison_rate_type` | `payment_recipient` |
+| COD | `extra.cod {amount, currency, payment_method}` | `advanced_options.collect_on_delivery` | not found |
+| EEI / ITN | `customs.eel_pfc` (NOEEI_30_37_a/h/f, NOEEI_30_36, AES_ITN) | — | `eei_reference` |
+| Non-delivery | `customs.non_delivery_option` (ABANDON/RETURN) | `customs.non_delivery` | not found |
+| Commercial invoice | `commercial_invoice_url` on transaction | `invoice_additional_details` | `shipping_documents[]` |
+| Tax IDs | — | `importer_of_record` | `regulatory_identifiers {eori, ioss, vat}`, `buyer_regulatory_identifiers`, `consignee_tax_id` |
+| Freight / LTL | — | `freight_class`, `fedex_freight`, `use_ups_ground_freight_pricing` | — |
+| Zone skipping | `extra.carrier_hub_id`, `carrier_hub_travel_time`, `fulfillment_center`, `critical_pull_time` | — | — |
+| References | ~19 UPS-only structured fields | `label_messages.reference1-3`, `custom_field1-3` | `metadata` |
+| Label format | `label_file_type` | `label_format` **and** `label_layout` | `printing_options` per document |
+| Carbon | `extra.carbon_neutral` (UPS) | — | — |
+| Delivery instructions | `extra.delivery_instructions` (≤500 chars, FedEx + OnTrac) | — | `destination_address.delivery_instructions` |
+| Alcohol | `extra.alcohol` | `advanced_options.contains_alcohol` | — |
+| Non-machinable | — | `advanced_options.non_machinable` | — |
+| Fragile | — | `advanced_options.fragile` | — |
+
+`Address` also has no `street3`, which ShipStation v1 (`street3`) and Easyship
+(`line_3`) both accept.
+
+Operational note: **Shippo does not return rates or shipments older than 390
+days**, which matters to anything caching a rate `object_id`.
+
+---
+
+## 10. A claim of ours that may be false
+
+shipzil classifies **Shippo as fan-out only**, based on one probe that returned
+zero rates for three parcels. Shippo documents native multi-piece via `parcels[]`,
+returning a combined amount and a master tracking number, and that same probe
+surfaced *"UPS — Hard: Too Many Requests"*.
+
+So the zero may have been rate limiting or one carrier's restriction rather than a
+capability limit. If so, `README.md` and `docs/API-REALITY.md` both assert
+something untrue, and shipzil is fanning out where it could rate natively, losing
+both the combined discount and the master tracking number.
+
+Needs re-probing across several carrier accounts before either document is trusted
+on this point.
+
+---
+
+## Where semantics differ under one name
+
+Things an abstraction must not flatten:
+
+- ShipEngine's `confirmation` values mean different things per carrier. The DHL
+  Express MyDHL mapping **inverts** "Signature Required" against the generic table.
+- Dry ice weight is kilograms-only on Shippo, four units on ShipEngine.
+- Easyship's Boxes API is **metric by default**, switchable only through a
+  dashboard setting — a unit dependency invisible to the API contract.
+- Easyship `shipments_update` **silently nulls** fields outside the resulting
+  `coc_type` group, with no error.
+- DIM rounds up; cubic rounds down.

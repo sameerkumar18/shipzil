@@ -42,6 +42,10 @@ class EasyPostCapabilities(Capabilities):
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
+    # Unverified: EasyPost's documentation has not been consulted, so shipzil
+    # claims nothing rather than guessing. Any declared hazmat detail is
+    # reported as unsupported until this is checked against their spec.
+    hazmat_fields = frozenset()
     capabilities = EasyPostCapabilities()
 
     def __init__(self, api_key: str, *, timeout: float = 60.0):
@@ -348,7 +352,10 @@ def _address(addr: Address) -> dict[str, Any]:
     if addr.email:
         out["email"] = addr.email
     if addr.residential is not None:
+        # Omitted when unknown; never sent as False on the caller's silence.
         out["residential"] = addr.residential
+    if addr.street3:
+        out["street3"] = addr.street3
     return out
 
 

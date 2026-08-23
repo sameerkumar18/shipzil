@@ -10,6 +10,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 from .errors import CapabilityError, ConfigurationError, SpendLimitExceeded
@@ -46,6 +47,14 @@ class Client:
         The caller gets the same shape regardless of whether the provider
         supports multi-parcel; `Quote.strategy` says which path was taken.
         """
+        quote = self._rate(shipment)
+        # Attached here rather than in each adapter so no adapter can forget it.
+        gap = self.adapter.hazmat_fidelity_gap(shipment)
+        if gap is not None:
+            quote = replace(quote, excluded=(*quote.excluded, gap))
+        return quote
+
+    def _rate(self, shipment: Shipment) -> Quote:
         if not shipment.is_multi_parcel:
             return self.adapter.rate_single(shipment)
 

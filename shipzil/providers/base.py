@@ -13,7 +13,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from ..models import Label, Parcel, Quote, Rate, Shipment
+from ..models import (
+    Exclusion,
+    ExclusionCode,
+    Label,
+    LithiumBatteryPacking,
+    Parcel,
+    Quote,
+    Rate,
+    Shipment,
+)
 
 __all__ = ["Adapter", "Capabilities"]
 
@@ -65,6 +74,51 @@ class Adapter(ABC):
         """
         raise NotImplementedError(
             f"{self.name} cannot rate multiple parcels natively; the client will fan out"
+        )
+
+    #: What hazmat detail this provider can actually carry. Anything a caller
+    #: declares that is not in this set gets reported, because a hazmat parcel
+    #: that ships under-declared leaves the liability with the shipper while
+    #: looking like a success.
+    hazmat_fields: frozenset[str] = frozenset()
+
+    def hazmat_fidelity_gap(self, shipment: Shipment) -> Exclusion | None:
+        """Report hazmat detail this provider will drop.
+
+        Not a refusal. Plenty of hazmat ships lawfully under limited or excepted
+        quantity with far less paperwork than a fully regulated consignment, and
+        deciding which applies is the shipper's call, not shipzil's. But a
+        declaration silently discarded is exactly the failure this library
+        exists to surface, so it comes back as an `Exclusion` on the quote.
+        """
+        declared: set[str] = set()
+        for dg in shipment.dangerous_goods:
+            if dg.lithium_batteries is not LithiumBatteryPacking.NONE:
+                declared.add("lithium_batteries")
+            if dg.biological_material:
+                declared.add("biological_material")
+            if dg.contains_liquids:
+                declared.add("contains_liquids")
+            if dg.contains_alcohol:
+                declared.add("contains_alcohol")
+            if dg.dry_ice is not None:
+                declared.add("dry_ice")
+            if dg.un_number or dg.hazard_class or dg.packing_group:
+                declared.add("regulated_detail")
+            if dg.radioactive:
+                declared.add("radioactive")
+        dropped = sorted(declared - self.hazmat_fields)
+        if not dropped:
+            return None
+        return Exclusion(
+            code=ExclusionCode.HAZMAT_DETAIL_UNSUPPORTED,
+            message=(
+                f"{self.name} cannot carry these declared hazmat details: "
+                f"{', '.join(dropped)}. They will not reach the carrier, so the "
+                "shipment may be under-declared. Use a provider that supports "
+                "them, or file the declaration outside shipzil."
+            ),
+            source="shipzil",
         )
 
     def is_test_mode(self) -> bool | None:

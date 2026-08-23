@@ -24,6 +24,7 @@ from ..errors import LabelPurchaseError
 from ..http import request
 from ..models import (
     Address,
+    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Label,
@@ -48,6 +49,12 @@ class ShipStationV2Capabilities(Capabilities):
 
 class ShipStationV2Adapter(Adapter):
     name = "shipstation_v2"
+    # advanced_options.{dangerous_goods, dangerous_goods_contact, dry_ice,
+    # dry_ice_weight, contains_alcohol}. The full IATA declaration exists on
+    # packages[].products[].dangerous_goods[] (UN number, class, packing group,
+    # transport mode, radioactive) but needs an itemised products array shipzil
+    # does not build yet, so regulated_detail is deliberately NOT claimed.
+    hazmat_fields = frozenset({"dry_ice", "contains_alcohol"})
     capabilities = ShipStationV2Capabilities()
 
     def __init__(
@@ -109,6 +116,12 @@ class ShipStationV2Adapter(Adapter):
                     "ship_from": _address(shipment.from_address),
                     "ship_to": _address(shipment.to_address),
                     "packages": [_package(p) for p in shipment.parcels],
+                    **(
+                        {"advanced_options": opts}
+                        if (opts := self._advanced_options(shipment, shipment.parcels[0]))
+                        else {}
+                    ),
+                    **({"ship_date": shipment.ship_date} if shipment.ship_date else {}),
                 },
             },
             timeout=self.timeout,
@@ -175,6 +188,39 @@ class ShipStationV2Adapter(Adapter):
                 )
             )
         return out
+
+    @staticmethod
+    def _advanced_options(shipment: Shipment, parcel: Parcel) -> dict[str, Any]:
+        """ShipEngine keeps hazmat booleans on the shipment and the full
+        IATA declaration on `packages[].products[].dangerous_goods[]`.
+
+        shipzil sends the shipment-level flags plus the emergency contact, which
+        several carriers require whenever hazmat is present. The per-product
+        declaration needs an itemised `products` array that shipzil does not
+        model yet, so a fully regulated shipment is reported as a fidelity gap
+        rather than sent half-declared.
+        """
+        opts: dict[str, Any] = {}
+        dg = parcel.dangerous_goods
+        if dg is not None and dg.contains:
+            opts["dangerous_goods"] = True
+            if dg.emergency_contact_name or dg.emergency_contact_phone:
+                opts["dangerous_goods_contact"] = {
+                    "name": dg.emergency_contact_name or "",
+                    "phone": dg.emergency_contact_phone or "",
+                }
+            if dg.contains_alcohol:
+                opts["contains_alcohol"] = True
+            if dg.dry_ice is not None and dg.dry_ice.contains:
+                opts["dry_ice"] = True
+                # ShipEngine accepts four units; kilograms is unambiguous.
+                opts["dry_ice_weight"] = {
+                    "value": float(dg.dry_ice.weight.to("kg")),
+                    "unit": "kilogram",
+                }
+        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
+            opts["delivered_duty_paid"] = True
+        return opts
 
     def _parse_rate(
         self, data: dict[str, Any], *, strategy: Strategy, parcel_count: int
@@ -281,6 +327,10 @@ def _address(addr: Address) -> dict[str, Any]:
         out["phone"] = addr.phone
     if addr.residential is not None:
         out["address_residential_indicator"] = "yes" if addr.residential else "no"
+    else:
+        # Explicit "unknown" rather than omission: ShipEngine has that value and
+        # defaults to it, so saying so is more honest than staying silent.
+        out["address_residential_indicator"] = "unknown"
     return out
 
 
@@ -288,6 +338,12 @@ def _package(parcel: Parcel) -> dict[str, Any]:
     weight = parcel.weight or parcel.derived_weight
     assert weight is not None  # guarded by _dimension_gap
     out: dict[str, Any] = {"weight": {"value": float(weight.to("oz")), "unit": "ounce"}}
+    if parcel.insured_value is not None:
+        out["insured_value"] = {"currency": "usd", "amount": float(parcel.insured_value)}
+    if parcel.packaging is not None:
+        # A carrier package code supplies the dimensions, so they are omitted.
+        out["package_code"] = parcel.packaging.code
+        return out
     if parcel.dimensions is not None:
         length, width, height = parcel.dimensions.to("in")
         out["dimensions"] = {

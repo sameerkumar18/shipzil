@@ -365,6 +365,74 @@ An unadorned `urllib` request gets Cloudflare error 1010 ("banned based on your
 browser's signature"), which looks exactly like an auth failure. shipzil sets a
 `User-Agent`, so this only bites when probing by hand.
 
+## Hazmat changes which rates come back, not just the price
+
+Measured on Shippo with a test token, identical parcel, the only difference being
+a declared lithium battery:
+
+```
+no hazmat            11 rates   2nd Day Air A.M., 2nd Day Air, 3 Day Select,
+                                Ground, Ground Advantage, Ground Saver, ...
+lithium batteries     3 rates   Ground Advantage, Priority Mail,
+                                Priority Mail Express
+```
+
+Every UPS and FedEx service disappears; only USPS survives. This matches Shippo's
+own note that dangerous-goods contents restrict eligibility to certain USPS
+service levels.
+
+The consequence for the previous version of shipzil is worse than a missing
+field: it quoted **11 rates for a battery shipment, 8 of which the carrier would
+refuse.** A silently omitted hazmat declaration is not a smaller answer, it is a
+wrong one.
+
+### Where each provider keeps hazmat, from their OpenAPI specs
+
+| Provider | Location | Detail carried |
+|---|---|---|
+| ShipEngine | `packages[].products[].dangerous_goods[]` | full IATA: UN number, shipping name, hazard class, subsidiary class, packing group i/ii/iii, packing instruction + section, regulation level and authority, transport mode, tunnel code, radioactive, reportable quantity |
+| ShipEngine | `advanced_shipment_options` | `dangerous_goods`, `dangerous_goods_contact`, `dry_ice`, `dry_ice_weight` (4 units), `contains_alcohol`, `regulated_content_type` (day_old_poultry, other_live_animal), `limited_quantity`, `non_machinable`, `fragile` |
+| Shippo | `extra.dangerous_goods` | `contains`, `lithium_batteries.contains`, `biological_material.contains`; plus `extra.dry_ice` (kg only, must not exceed parcel weight), `extra.alcohol` (`recipient_type` licensee/consumer, mandatory for FedEx) |
+| Easyship | `parcels[].items[]` | `contains_battery_pi966`, `contains_battery_pi967`, `contains_liquids`, `cpsc_compliance` |
+| ShipStation v1 | — | nothing found |
+
+Three different levels of granularity — per product, per shipment, per item — for
+the same regulatory concept. shipzil accepts a declaration per `Parcel`, maps it
+down to whatever the provider carries, and reports the remainder as
+`HAZMAT_DETAIL_UNSUPPORTED` rather than dropping it. `Adapter.hazmat_fields`
+records what each provider can actually take, read from these specs.
+
+**PI966 versus PI967 is not cosmetic.** PI966 covers batteries packed *with*
+equipment, PI967 batteries *contained in* equipment, with different labelling and
+documentation duties. Easyship is the only provider that models the distinction;
+Shippo collapses both to one boolean and shipzil says so.
+
+USPS added a **Hazmat Handling Fee** plus a separate noncompliance fee for
+improperly prepared hazardous material on 12 July 2026 (Publication 52).
+
+## Residential is worth $6.15, measured
+
+Same parcel, same lane, only the destination classification changing, live on
+Easyship:
+
+```
+commercial    FedEx 2Day  19.55
+residential   FedEx 2Day  25.70
+unknown       FedEx 2Day  19.55     <- provider defaults to the cheaper answer
+```
+
+Exactly $6.15, and `residential_full_fee: 6.15` was present in the response the
+whole time while shipzil discarded it. Note the third line: an unclassified
+address quotes as commercial, so the caller sees the *cheaper* number and the
+invoice arrives higher. shipzil cannot fix that, but it now surfaces
+`residential_full_fee` in `Rate.surcharges` so the exposure is visible.
+
+`Address.address_class` is an enum rather than a boolean because Shippo's v2
+address model made the same change: PO boxes and military addresses are neither
+residential nor commercial. `Address.residential` remains as a tri-state view for
+providers that take a boolean, and **None means omit the field** — the previous
+code did `bool(addr.residential)`, turning silence into "commercial".
+
 ## Test mode is knowable on four surfaces out of five
 
 | Provider | How | Value |

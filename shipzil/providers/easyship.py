@@ -32,15 +32,19 @@ from ..errors import LabelPurchaseError, ValidationError
 from ..http import request
 from ..models import (
     Address,
+    DangerousGoods,
+    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Item,
     Label,
+    LithiumBatteryPacking,
     Parcel,
     Quote,
     Rate,
     Shipment,
     Strategy,
+    TrackingLeg,
 )
 from ..normalize import code_from_text
 from .base import Adapter, Capabilities
@@ -63,6 +67,9 @@ class EasyshipCapabilities(Capabilities):
 
 class EasyshipAdapter(Adapter):
     name = "easyship"
+    # Per item: contains_battery_pi966 / pi967 / contains_liquids. Easyship is
+    # the only provider that distinguishes the two IATA packing instructions.
+    hazmat_fields = frozenset({"lithium_batteries", "contains_liquids"})
     capabilities = EasyshipCapabilities()
 
     def __init__(
@@ -112,13 +119,19 @@ class EasyshipAdapter(Adapter):
         if gap is not None:
             return Quote(excluded=(gap,), via=f"{self.name}:rates")
 
-        payload = {
+        payload: dict[str, Any] = {
             "origin_address": _address(shipment.from_address),
             "destination_address": _address(shipment.to_address),
             "parcels": [self._parcel(parcel)],
             "shipping_settings": {"units": {"weight": "kg", "dimensions": "cm"}},
-            "incoterms": "DDU",
         }
+        incoterms = self._incoterms(shipment)
+        if incoterms:
+            payload["incoterms"] = incoterms
+        residential = shipment.to_address.residential
+        if residential is not None:
+            # Destination only; Easyship has no origin residential field.
+            payload["set_as_residential"] = residential
         try:
             _status, body = request(
                 "POST", self._url("/rates"), headers=self._headers, json=payload,
@@ -149,6 +162,50 @@ class EasyshipAdapter(Adapter):
             rates=rates, excluded=excluded, via=f"{self.name}:rates", strategy=Strategy.NATIVE
         )
 
+    #: Cost components Easyship separates out. Kept in provider spelling so a
+    #: caller can reconcile against an invoice line for line.
+    _SURCHARGE_KEYS = (
+        "fuel_surcharge",
+        # Reported even when the destination is not classified residential, so
+        # it doubles as an exposure signal for an unclassified address.
+        # `residential_discounted_fee` is the SAME surcharge at a second price
+        # point, not an additional charge, so including both would double-count.
+        "residential_full_fee",
+        "remote_area_surcharge",
+        "oversized_surcharge",
+        "additional_services_surcharge",
+        "insurance_fee",
+        "warehouse_handling_fee",
+        "minimum_pickup_fee",
+        "ddp_handling_fee",
+        "import_duty_charge",
+        "import_tax_charge",
+        "sales_tax",
+        "provincial_sales_tax",
+    )
+
+    @classmethod
+    def _surcharges(cls, data: dict[str, Any]) -> tuple[tuple[str, Decimal], ...]:
+        """Non-zero cost components.
+
+        Easyship returns 25 of these and shipzil used to keep only the total, so
+        a 13% gap between base carriage and total was invisible. Worth noting
+        that `residential_full_fee` is reported even when it is not applied, so a
+        caller can see the exposure of an unclassified address.
+        """
+        out = []
+        for key in cls._SURCHARGE_KEYS:
+            raw = data.get(key)
+            if raw in (None, "", 0, 0.0):
+                continue
+            try:
+                value = Decimal(str(raw))
+            except (ArithmeticError, ValueError):
+                continue
+            if value:
+                out.append((key, value))
+        return tuple(out)
+
     def _parse_rate(self, data: dict[str, Any]) -> Rate:
         service = data.get("courier_service") or {}
         # Carrier identity is `umbrella_name` ("FedEx"); `name` is the service
@@ -171,6 +228,12 @@ class EasyshipAdapter(Adapter):
             service_code=str(service.get("id") or "") or None,
             strategy=Strategy.NATIVE,
             parcel_count=1,
+            base_amount=(
+                Decimal(str(data["shipment_charge"]))
+                if data.get("shipment_charge") is not None
+                else None
+            ),
+            surcharges=self._surcharges(data),
             raw=data,
         )
 
@@ -233,8 +296,13 @@ class EasyshipAdapter(Adapter):
                 "buy_label": True,
                 "buy_label_synchronous": True,
             },
-            "incoterms": "DDU",
         }
+        incoterms = self._incoterms(shipment)
+        if incoterms:
+            payload["incoterms"] = incoterms
+        residential = shipment.to_address.residential
+        if residential is not None:
+            payload["set_as_residential"] = residential
         if service_id:
             payload["courier_settings"] = {"courier_service_id": service_id}
 
@@ -309,6 +377,20 @@ class EasyshipAdapter(Adapter):
                 break
         if not tracking:
             tracking = str(record.get("tracking_number") or "")
+        legs = tuple(
+            TrackingLeg(
+                tracking_number=str(t.get("tracking_number") or ""),
+                leg_number=int(t.get("leg_number") or 1),
+                handler=t.get("handler"),
+                local_tracking_number=t.get("local_tracking_number"),
+                alternate_tracking_number=t.get("alternate_tracking_number"),
+            )
+            for t in sorted(
+                (x for x in (record.get("trackings") or []) if isinstance(x, dict)),
+                key=lambda x: x.get("leg_number") or 0,
+            )
+            if t.get("tracking_number")
+        )
         docs = record.get("shipping_documents") or []
         url = ""
         for doc in docs:
@@ -333,6 +415,7 @@ class EasyshipAdapter(Adapter):
             provider=self.name,
             is_test=self.is_test_mode(),
             shipment_id=str(record.get("easyship_shipment_id") or fallback_id),
+            tracking_legs=legs,
             raw=body,
         )
 
@@ -401,6 +484,20 @@ class EasyshipAdapter(Adapter):
             )
         return None
 
+    @staticmethod
+    def _incoterms(shipment: Shipment) -> str | None:
+        """Map duty liability to Easyship's two-value enum.
+
+        Easyship accepts DDU, DDP or null. UNSPECIFIED sends nothing so the
+        account default applies — shipzil used to hardcode DDU, which silently
+        made the recipient liable for duty on every international shipment.
+        """
+        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
+            return "DDP"
+        if shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
+            return "DDU"
+        return None
+
     def _parcel(self, parcel: Parcel) -> dict[str, Any]:
         out: dict[str, Any] = {}
         weight = parcel.weight or parcel.derived_weight
@@ -413,8 +510,11 @@ class EasyshipAdapter(Adapter):
                 "width": float(width),
                 "height": float(height),
             }
+        if parcel.packaging is not None:
+            # A slug carries the dimensions, so it replaces `box`.
+            out["box"] = {"slug": parcel.packaging.code}
         if parcel.items:
-            out["items"] = [self._item(i) for i in parcel.items]
+            out["items"] = [self._item(i, parcel.dangerous_goods) for i in parcel.items]
         else:
             # Easyship requires at least one item. Describe the parcel itself
             # rather than inventing contents it does not have.
@@ -431,7 +531,27 @@ class EasyshipAdapter(Adapter):
             ]
         return out
 
-    def _item(self, item: Item) -> dict[str, Any]:
+    @staticmethod
+    def _hazmat_item_flags(dg: DangerousGoods | None) -> dict[str, Any]:
+        """Easyship carries hazmat per item, and only these three flags.
+
+        `contains_battery_pi966` / `pi967` are the IATA packing instructions and
+        are not interchangeable. Anything else in a DangerousGoods — UN number,
+        hazard class, packing group, dry ice — has nowhere to go here, which the
+        adapter reports rather than dropping silently.
+        """
+        if dg is None or not dg.contains:
+            return {}
+        out: dict[str, Any] = {}
+        if dg.lithium_batteries is LithiumBatteryPacking.PACKED_WITH_EQUIPMENT:
+            out["contains_battery_pi966"] = True
+        elif dg.lithium_batteries is LithiumBatteryPacking.CONTAINED_IN_EQUIPMENT:
+            out["contains_battery_pi967"] = True
+        if dg.contains_liquids:
+            out["contains_liquids"] = True
+        return out
+
+    def _item(self, item: Item, dg: DangerousGoods | None = None) -> dict[str, Any]:
         out: dict[str, Any] = {
             "description": item.description,
             "quantity": item.quantity,
@@ -456,6 +576,7 @@ class EasyshipAdapter(Adapter):
             out["category"] = category
         if item.origin_country:
             out["origin_country_alpha2"] = item.origin_country
+        out.update(self._hazmat_item_flags(dg))
         return out
 
 

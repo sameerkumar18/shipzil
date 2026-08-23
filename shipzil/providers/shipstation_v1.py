@@ -62,6 +62,8 @@ class ShipStationV1Capabilities(Capabilities):
 
 class ShipStationV1Adapter(Adapter):
     name = "shipstation_v1"
+    # No hazmat fields found anywhere in the v1 documentation.
+    hazmat_fields = frozenset()
     capabilities = ShipStationV1Capabilities()
 
     def __init__(
@@ -249,8 +251,16 @@ class ShipStationV1Adapter(Adapter):
                 "height": float(height),
             },
             "confirmation": self.confirmation,
-            "residential": bool(to.residential),
         }
+        # Only send `residential` when it is actually known. bool(None) is
+        # False, which asserts "commercial" and understates the quote.
+        if to.residential is not None:
+            payload["residential"] = to.residential
+        if parcel.packaging is not None:
+            # v1 calls this packageCode, and it replaces dimensions.
+            payload["packageCode"] = parcel.packaging.code
+            payload.pop("dimensions", None)
+
         _status, body = request(
             "POST",
             f"{BASE}/shipments/getrates",
@@ -320,7 +330,11 @@ class ShipStationV1Adapter(Adapter):
         payload: dict[str, Any] = {
             "carrierCode": carrier_code,
             "serviceCode": service_code,
-            "packageCode": str((rate.raw or {}).get("packageCode") or "package"),
+            "packageCode": (
+                parcel.packaging.code
+                if parcel.packaging is not None
+                else str((rate.raw or {}).get("packageCode") or "package")
+            ),
             "confirmation": self.confirmation,
             "shipFrom": _address(shipment.from_address),
             "shipTo": _address(shipment.to_address),
@@ -417,10 +431,13 @@ def _address(addr: Any) -> dict[str, Any]:
         "company": addr.company or None,
         "street1": addr.street1 or "",
         "street2": addr.street2 or None,
+        "street3": addr.street3 or None,
         "city": addr.city or "",
         "state": addr.state or "",
         "postalCode": addr.postal_code or "",
         "country": addr.country or "US",
         "phone": addr.phone or None,
-        "residential": bool(addr.residential),
+        # Stays None when unknown. bool(None) is False, which would assert
+        # "commercial" and understate the quote by the residential surcharge.
+        "residential": addr.residential,
     }
