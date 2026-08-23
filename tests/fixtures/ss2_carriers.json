@@ -1,0 +1,792 @@
+{
+  "carriers": [
+    {
+      "account_number": null,
+      "allows_returns": true,
+      "balance": 0.0,
+      "carrier_code": "usps",
+      "carrier_id": "se-30718",
+      "disabled_by_billing_plan": false,
+      "friendly_name": "USPS",
+      "funding_source_id": "se-8287",
+      "has_multi_package_supporting_services": false,
+      "nickname": "Free",
+      "options": [
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "non_machinable"
+        },
+        {
+          "default_value": null,
+          "description": "Specify the responsibility of delivery duties on international orders from US to CA",
+          "name": "canada_delivered_duty"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains dangerous goods.",
+          "name": "dangerous_goods"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains a dangerous goods category.",
+          "name": "dangerous_goods_category"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains a physical or electronic return receipt.",
+          "name": "return_receipt"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains a registered mail value.",
+          "name": "registered_mail_value"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains a cremated remains.",
+          "name": "cremated_remains"
+        },
+        {
+          "default_value": null,
+          "description": "Include package level dangerous goods information",
+          "name": "dangerous_goods_package_level"
+        },
+        {
+          "default_value": null,
+          "description": "This shipment contains regulated contents.",
+          "name": "regulated_content_type"
+        }
+      ],
+      "packages": [
+        {
+          "description": "USPS flat rate envelope. A special cardboard envelope provided by the USPS that clearly indicates \"Flat Rate\".",
+          "name": "Flat Rate Envelope",
+          "package_code": "flat_rate_envelope",
+          "package_id": null
+        },
+        {
+          "description": "Flat Rate Legal Envelope",
+          "name": "Flat Rate Legal Envelope",
+          "package_code": "flat_rate_legal_envelope",
+          "package_id": null
+        },
+        {
+          "description": "Flat Rate Padded Envelope",
+          "name": "Flat Rate Padded Envelope",
+          "package_code": "flat_rate_padded_envelope",
+          "package_id": null
+        },
+        {
+          "description": "Large envelope or flat. Has one dimension that is between 11 1/2\" and 15\" long, 6 1/18\" and 12\" high, or 1/4\" and 3/4\" thick.",
+          "name": "Large Envelope or Flat",
+          "package_code": "large_envelope_or_flat",
+          "package_id": null
+        },
+        {
+          "description": "Large Flat Rate Box",
+          "name": "Large Flat Rate Box",
+          "package_code": "large_flat_rate_box",
+          "package_id": null
+        },
+        {
+          "description": "Large package. Longest side plus the distance around the thickest part is over 84\" and less than or equal to 108\".",
+          "name": "Large Package (any side > 12\")",
+          "package_code": "large_package",
+          "package_id": null
+        },
+        {
+          "description": "Letter",
+          "name": "Letter",
+          "package_code": "letter",
+          "package_id": null
+        },
+        {
+          "description": "USPS flat rate box. A special 11\" x 8 1/2\" x 5 1/2\" or 14\" x 3.5\" x 12\" USPS box that clearly indicates \"Flat Rate Box\"",
+          "name": "Medium Flat Rate Box",
+          "package_code": "medium_flat_rate_box",
+          "package_id": null
+        },
+        {
+          "description": "Non-Rectangular package type that is cylindrical in shape.",
+          "name": "Non Rectangular Package",
+          "package_code": "non_rectangular",
+          "package_id": null
+        },
+        {
+          "description": "Non-Standard package type.",
+          "name": "Non Standard Package",
+          "package_code": "non_standard",
+          "package_id": null
+        },
+        {
+          "description": "Package. Longest side plus the distance around the thickest part is less than or equal to 84\"",
+          "name": "Package",
+          "package_code": "package",
+          "package_id": null
+        },
+        {
+          "description": "USPS postcard",
+          "name": "Postcard",
+          "package_code": "postcard",
+          "package_id": null
+        },
+        {
+          "description": "Regional Rate Box A",
+          "name": "Regional Rate Box A",
+          "package_code": "regional_rate_box_a",
+          "package_id": null
+        },
+        {
+          "description": "Regional Rate Box B",
+          "name": "Regional Rate Box B",
+          "package_code": "regional_rate_box_b",
+          "package_id": null
+        },
+        {
+          "description": "Small Flat Rate Box",
+          "name": "Small Flat Rate Box",
+          "package_code": "small_flat_rate_box",
+          "package_id": null
+        },
+        {
+          "description": "Thick envelope. Envelopes or flats greater than 3/4\" at the thickest point.",
+          "name": "Thick Envelope",
+          "package_code": "thick_envelope",
+          "package_id": null
+        }
+      ],
+      "primary": true,
+      "requires_funded_amount": true,
+      "send_rates": true,
+      "services": [
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Priority Mail",
+          "send_rates": true,
+          "service_code": "usps_priority_mail"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Priority Mail Express",
+          "send_rates": true,
+          "service_code": "usps_priority_mail_express"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Parcel Select Ground",
+          "send_rates": true,
+          "service_code": "usps_parcel_select"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS First Class Mail",
+          "send_rates": true,
+          "service_code": "usps_first_class_mail"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Media Mail",
+          "send_rates": true,
+          "service_code": "usps_media_mail"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Ground Advantage",
+          "send_rates": true,
+          "service_code": "usps_ground_advantage"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Priority Mail Intl",
+          "send_rates": true,
+          "service_code": "usps_priority_mail_international"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS Priority Mail Express Intl",
+          "send_rates": true,
+          "service_code": "usps_priority_mail_express_international"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label",
+            "paperless"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "USPS First Class Mail Intl",
+          "send_rates": true,
+          "service_code": "usps_first_class_mail_international"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "GlobalPost Economy Intl",
+          "send_rates": true,
+          "service_code": "globalpost_economy"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "GlobalPost Standard Intl",
+          "send_rates": true,
+          "service_code": "globalpost_priority"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": false,
+          "name": "GlobalPost Plus",
+          "send_rates": true,
+          "service_code": "gp_plus"
+        },
+        {
+          "carrier_code": "usps",
+          "carrier_id": "se-30718",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": false,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "GlobalPost Parcel Select SmartSaver",
+          "send_rates": true,
+          "service_code": "globalpost_parcel_select_smart_saver"
+        }
+      ],
+      "supports_label_messages": true,
+      "supports_prepaid_duties_taxes": false,
+      "supports_user_managed_rates": false
+    },
+    {
+      "account_number": "ups_30719",
+      "allows_returns": true,
+      "balance": 0.0,
+      "carrier_code": "ups",
+      "carrier_id": "se-30719",
+      "disabled_by_billing_plan": false,
+      "friendly_name": "UPS",
+      "funding_source_id": "se-8287",
+      "has_multi_package_supporting_services": true,
+      "nickname": null,
+      "options": [
+        {
+          "default_value": "",
+          "description": "",
+          "name": "collect_on_delivery"
+        },
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "contains_alcohol"
+        },
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "delivered_duty_paid"
+        },
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "dry_ice"
+        },
+        {
+          "default_value": "0",
+          "description": "",
+          "name": "dry_ice_weight"
+        },
+        {
+          "default_value": "",
+          "description": "",
+          "name": "freight_class"
+        },
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "non_machinable"
+        },
+        {
+          "default_value": "false",
+          "description": "",
+          "name": "saturday_delivery"
+        },
+        {
+          "default_value": "false",
+          "description": "Driver may release package without signature",
+          "name": "shipper_release"
+        },
+        {
+          "default_value": "false",
+          "description": "This shipment requires Additional Handling",
+          "name": "additional_handling"
+        }
+      ],
+      "packages": [
+        {
+          "description": "Package. Longest side plus the distance around the thickest part is less than or equal to 84\"",
+          "name": "Package",
+          "package_code": "package",
+          "package_id": null
+        },
+        {
+          "description": "Express Box - Large",
+          "name": "UPS  Express\u00ae Box - Large",
+          "package_code": "ups__express_box_large",
+          "package_id": null
+        },
+        {
+          "description": "10 KG Box",
+          "name": "UPS 10 KG Box\u00ae",
+          "package_code": "ups_10_kg_box",
+          "package_id": null
+        },
+        {
+          "description": "25 KG Box",
+          "name": "UPS 25 KG Box\u00ae",
+          "package_code": "ups_25_kg_box",
+          "package_id": null
+        },
+        {
+          "description": "Express Box",
+          "name": "UPS Express\u00ae Box",
+          "package_code": "ups_express_box",
+          "package_id": null
+        },
+        {
+          "description": "Express Box - Medium",
+          "name": "UPS Express\u00ae Box - Medium",
+          "package_code": "ups_express_box_medium",
+          "package_id": null
+        },
+        {
+          "description": "Express Box - Small",
+          "name": "UPS Express\u00ae Box - Small",
+          "package_code": "ups_express_box_small",
+          "package_id": null
+        },
+        {
+          "description": "Pak",
+          "name": "UPS Express\u00ae Pak",
+          "package_code": "ups_express_pak",
+          "package_id": null
+        },
+        {
+          "description": "Letter",
+          "name": "UPS Letter",
+          "package_code": "ups_letter",
+          "package_id": null
+        },
+        {
+          "description": "Tube",
+          "name": "UPS Tube",
+          "package_code": "ups_tube",
+          "package_id": null
+        }
+      ],
+      "primary": true,
+      "requires_funded_amount": true,
+      "send_rates": true,
+      "services": [
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": false,
+          "name": "UPS\u00ae Ground Saver",
+          "send_rates": true,
+          "service_code": "ups_ground_saver"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS\u00ae Ground",
+          "send_rates": true,
+          "service_code": "ups_ground"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": true,
+          "name": "UPS Ground\u00ae (International)",
+          "send_rates": true,
+          "service_code": "ups_ground_international"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": false,
+          "name": "UPS Standard",
+          "send_rates": true,
+          "service_code": "ups_standard"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": false,
+          "name": "UPS Standard\u00ae",
+          "send_rates": true,
+          "service_code": "ups_standard_international"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": false,
+          "name": "UPS Worldwide Express\u00ae",
+          "send_rates": true,
+          "service_code": "ups_worldwide_express"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS 2nd Day Air\u00ae",
+          "send_rates": true,
+          "service_code": "ups_2nd_day_air"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": false,
+          "name": "UPS Worldwide Expedited\u00ae",
+          "send_rates": true,
+          "service_code": "ups_worldwide_expedited"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": false,
+          "name": "UPS Worldwide Express Plus\u00ae",
+          "send_rates": true,
+          "service_code": "ups_worldwide_express_plus"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS 2nd Day Air AM\u00ae",
+          "send_rates": true,
+          "service_code": "ups_2nd_day_air_am"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS Next Day Air Saver\u00ae",
+          "send_rates": true,
+          "service_code": "ups_next_day_air_saver"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS Next Day Air\u00ae",
+          "send_rates": true,
+          "service_code": "ups_next_day_air"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS Next Day Air\u00ae Early",
+          "send_rates": true,
+          "service_code": "ups_next_day_air_early_am"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS Express\u00ae",
+          "send_rates": true,
+          "service_code": "ups_express"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": true,
+          "international": false,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS Express Plus\u00ae",
+          "send_rates": true,
+          "service_code": "ups_express_plus"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label",
+            "paperless",
+            "no_box_no_label"
+          ],
+          "domestic": true,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": false,
+          "is_return_supported": true,
+          "name": "UPS 3 Day Select\u00ae",
+          "send_rates": true,
+          "service_code": "ups_3_day_select"
+        },
+        {
+          "carrier_code": "ups",
+          "carrier_id": "se-30719",
+          "display_schemes": [
+            "label"
+          ],
+          "domestic": false,
+          "international": true,
+          "is_multi_package_supported": true,
+          "is_prepaid_duties_taxes_supported": true,
+          "is_return_supported": false,
+          "name": "UPS Worldwide Saver\u00ae",
+          "send_rates": true,
+          "service_code": "ups_worldwide_saver"
+        }
+      ],
+      "supports_label_messages": true,
+      "supports_prepaid_duties_taxes": true,
+      "supports_user_managed_rates": false
+    }
+  ],
+  "errors": [],
+  "links": {
+    "first": {
+      "href": "https://api.shipstation.com/v1/carriers?page=1&page_size=2"
+    },
+    "last": {
+      "href": "https://api.shipstation.com/v1/carriers?page=1&page_size=2"
+    },
+    "next": {},
+    "prev": {}
+  },
+  "page": 1,
+  "page_size": 2,
+  "pages": 1,
+  "request_id": "5521de87-f735-4b94-8d0e-fa2d090af232",
+  "total": 2
+}

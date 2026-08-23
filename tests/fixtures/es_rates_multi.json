@@ -1,0 +1,28 @@
+{
+  "error": {
+    "code": "invalid_content",
+    "details": [
+      "No shipping solutions available based on the information provided"
+    ],
+    "links": [
+      {
+        "kind": "documentation",
+        "name": "Errors",
+        "url": "https://developers.easyship.com/reference/errors"
+      },
+      {
+        "kind": "documentation",
+        "name": "Request Rates",
+        "url": "https://developers.easyship.com/reference/rates_request"
+      },
+      {
+        "kind": "how-to-guide",
+        "name": "How to Display Rates at Checkout",
+        "url": "https://developers.easyship.com/docs/how-to-display-rates-at-checkout"
+      }
+    ],
+    "message": "The request body content is not valid.",
+    "request_id": "d5ef11f69aca3590e60f4a13e0f11056",
+    "type": "invalid_request_error"
+  }
+}

@@ -1,0 +1,181 @@
+{
+  "address_from": {
+    "city": "San Francisco",
+    "company": "",
+    "country": "US",
+    "email": "redacted@example.com",
+    "is_complete": true,
+    "is_residential": null,
+    "name": "Sender",
+    "object_id": "d42503ad30b24c649ddb3594a56d43fe",
+    "phone": "REDACTED",
+    "state": "CA",
+    "street1": "215 Clayton St",
+    "street2": "",
+    "street3": "",
+    "street_no": "",
+    "test": true,
+    "validation_results": {},
+    "zip": "94117"
+  },
+  "address_return": {
+    "city": "San Francisco",
+    "company": "",
+    "country": "US",
+    "email": "redacted@example.com",
+    "is_complete": true,
+    "is_residential": null,
+    "name": "Sender",
+    "object_id": "d42503ad30b24c649ddb3594a56d43fe",
+    "phone": "REDACTED",
+    "state": "CA",
+    "street1": "215 Clayton St",
+    "street2": "",
+    "street3": "",
+    "street_no": "",
+    "test": true,
+    "validation_results": {},
+    "zip": "94117"
+  },
+  "address_to": {
+    "city": "New York",
+    "company": "",
+    "country": "US",
+    "email": "redacted@example.com",
+    "is_complete": true,
+    "is_residential": null,
+    "name": "Recipient",
+    "object_id": "2692646f3f3d42ba837239cba6ffd9f5",
+    "phone": "REDACTED",
+    "state": "NY",
+    "street1": "1 Rockefeller Plaza",
+    "street2": "",
+    "street3": "",
+    "street_no": "",
+    "test": true,
+    "validation_results": {},
+    "zip": "10020"
+  },
+  "alternate_address_to": null,
+  "carrier_accounts": [],
+  "customs_declaration": null,
+  "extra": {},
+  "messages": [
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account shippo_usps_master doesn't support one or more shipment options"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account COURIERSPLEASE_SHIPPO_TIER_1 doesn't support one or more shipment options"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account shippo_canada_post_master doesn't support one or more shipment options"
+    },
+    {
+      "code": "",
+      "source": "DHLExpress",
+      "text": "Shippo's DHL Express master account doesn't support shipments to inside of the US"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account shippo_lso_account doesn't support one or more shipment options"
+    },
+    {
+      "code": "10429",
+      "source": "UPS",
+      "text": "Hard: Too Many Requests"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account shippo_sendle_account doesn't support one or more shipment options"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account shippo_deutsche_post_account doesn't support one or more shipment options"
+    },
+    {
+      "code": "",
+      "source": "Shippo",
+      "text": "Carrier account FASTWAY_SHIPPO_TIER_1 doesn't support one or more shipment options"
+    },
+    {
+      "code": "10429",
+      "source": "UPS",
+      "text": "Hard: Too Many Requests"
+    }
+  ],
+  "metadata": "",
+  "object_created": "2026-08-23T11:57:06.528Z",
+  "object_id": "e8e300ec0794444080844b5dfb17074e",
+  "object_owner": "redacted@example.com",
+  "object_updated": "2026-08-23T11:57:07.121Z",
+  "order": null,
+  "parcels": [
+    {
+      "distance_unit": "in",
+      "extra": {},
+      "height": "4.0000",
+      "length": "10.0000",
+      "line_items": [],
+      "mass_unit": "oz",
+      "metadata": "",
+      "object_created": "2026-08-23T11:57:06.528Z",
+      "object_id": "895d1b6a74a64771a5177d063b1b31df",
+      "object_owner": "redacted@example.com",
+      "object_state": "VALID",
+      "object_updated": "2026-08-23T11:57:06.528Z",
+      "template": null,
+      "test": true,
+      "weight": "16.0000",
+      "width": "8.0000"
+    },
+    {
+      "distance_unit": "in",
+      "extra": {},
+      "height": "6.0000",
+      "length": "12.0000",
+      "line_items": [],
+      "mass_unit": "oz",
+      "metadata": "",
+      "object_created": "2026-08-23T11:57:06.528Z",
+      "object_id": "ad10d49815a547e896aca21201abbc47",
+      "object_owner": "redacted@example.com",
+      "object_state": "VALID",
+      "object_updated": "2026-08-23T11:57:06.528Z",
+      "template": null,
+      "test": true,
+      "weight": "32.0000",
+      "width": "9.0000"
+    },
+    {
+      "distance_unit": "in",
+      "extra": {},
+      "height": "6.0000",
+      "length": "6.0000",
+      "line_items": [],
+      "mass_unit": "oz",
+      "metadata": "",
+      "object_created": "2026-08-23T11:57:06.528Z",
+      "object_id": "bc333fc47e584c36ae3c9b170a949151",
+      "object_owner": "redacted@example.com",
+      "object_state": "VALID",
+      "object_updated": "2026-08-23T11:57:06.528Z",
+      "template": null,
+      "test": true,
+      "weight": "8.0000",
+      "width": "6.0000"
+    }
+  ],
+  "rates": [],
+  "shipment_date": "2026-08-23T11:57:06.527Z",
+  "status": "SUCCESS",
+  "test": true
+}

@@ -1,0 +1,642 @@
+{
+  "advanced_options": {
+    "additional_handling": false,
+    "ancillary_endorsements_option": null,
+    "bill_to_account": null,
+    "bill_to_address_line1": null,
+    "bill_to_country_code": null,
+    "bill_to_name": null,
+    "bill_to_party": null,
+    "bill_to_postal_code": null,
+    "collect_on_delivery": null,
+    "contains_alcohol": false,
+    "custom_field1": null,
+    "custom_field2": null,
+    "custom_field3": null,
+    "delivered_duty_paid": false,
+    "delivery_as_addressed": false,
+    "dry_ice": false,
+    "dry_ice_weight": null,
+    "event_notification": false,
+    "fedex_freight": null,
+    "fragile": false,
+    "freight_class": null,
+    "guaranteed_duties_and_taxes": false,
+    "import_services": false,
+    "limited_quantity": false,
+    "non_machinable": false,
+    "override_holiday": false,
+    "own_document_upload": false,
+    "prepaid_duties_taxes": false,
+    "return_after_first_attempt": false,
+    "return_pickup_attempts": null,
+    "saturday_delivery": false,
+    "third_party_consignee": false
+  },
+  "amount_paid": null,
+  "assigned_user": null,
+  "carrier_id": null,
+  "comparison_rate_type": null,
+  "confirmation": "none",
+  "created_at": "2026-08-23T12:01:04.66Z",
+  "customs": null,
+  "dangerous_goods_declaration": null,
+  "deliver_by_date": null,
+  "external_order_id": null,
+  "external_shipment_id": null,
+  "hold_until_date": null,
+  "insurance_provider": "none",
+  "internal_notes": null,
+  "is_gift": false,
+  "is_return": false,
+  "items": [],
+  "modified_at": "2026-08-23T12:01:04.65Z",
+  "notes_for_gift": null,
+  "notes_from_buyer": null,
+  "notes_to_buyer": null,
+  "order_source_code": null,
+  "packages": [
+    {
+      "content_description": null,
+      "dangerous_goods_package_info": null,
+      "dimensions": {
+        "height": 4.0,
+        "length": 10.0,
+        "unit": "inch",
+        "width": 8.0
+      },
+      "external_package_id": null,
+      "insured_value": {
+        "amount": 0.0,
+        "currency": "usd"
+      },
+      "label_messages": {
+        "reference1": null,
+        "reference2": null,
+        "reference3": null
+      },
+      "package_code": "package",
+      "package_id": "se-3",
+      "package_name": "Package",
+      "products": null,
+      "shipment_package_id": "se-409347420",
+      "weight": {
+        "unit": "ounce",
+        "value": 16.0
+      }
+    },
+    {
+      "content_description": null,
+      "dangerous_goods_package_info": null,
+      "dimensions": {
+        "height": 6.0,
+        "length": 12.0,
+        "unit": "inch",
+        "width": 9.0
+      },
+      "external_package_id": null,
+      "insured_value": {
+        "amount": 0.0,
+        "currency": "usd"
+      },
+      "label_messages": {
+        "reference1": null,
+        "reference2": null,
+        "reference3": null
+      },
+      "package_code": "package",
+      "package_id": "se-3",
+      "package_name": "Package",
+      "products": null,
+      "shipment_package_id": "se-409347421",
+      "weight": {
+        "unit": "ounce",
+        "value": 32.0
+      }
+    },
+    {
+      "content_description": null,
+      "dangerous_goods_package_info": null,
+      "dimensions": {
+        "height": 6.0,
+        "length": 6.0,
+        "unit": "inch",
+        "width": 6.0
+      },
+      "external_package_id": null,
+      "insured_value": {
+        "amount": 0.0,
+        "currency": "usd"
+      },
+      "label_messages": {
+        "reference1": null,
+        "reference2": null,
+        "reference3": null
+      },
+      "package_code": "package",
+      "package_id": "se-3",
+      "package_name": "Package",
+      "products": null,
+      "shipment_package_id": "se-409347422",
+      "weight": {
+        "unit": "ounce",
+        "value": 8.0
+      }
+    }
+  ],
+  "rate_response": {
+    "created_at": "2026-08-23T12:01:06.1185542Z",
+    "errors": [
+      {
+        "carrier_code": "usps",
+        "carrier_id": "se-30718",
+        "carrier_name": "USPS",
+        "error_code": "multipackage_not_supported",
+        "error_source": "shipengine",
+        "error_type": "validation",
+        "message": "carrier 30718 does not support multipackage. unable to rate the shipment"
+      }
+    ],
+    "invalid_rates": [],
+    "rate_request_id": "se-92706797",
+    "rates": [
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Friday 8/28 by 11:00 PM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 4,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-28T23:00:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_attributes": [
+          "cheapest",
+          "best_value"
+        ],
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 25.27,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201842",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_ground",
+        "service_type": "UPS\u00ae Ground",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 25.27,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Tuesday 8/25 by 08:30 AM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 1,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-25T08:30:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_attributes": [
+          "fastest"
+        ],
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 272.76,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201837",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_next_day_air_early_am",
+        "service_type": "UPS Next Day Air\u00ae Early",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 272.76,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Thursday 8/27 by 11:00 PM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 3,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-27T23:00:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 35.52,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201841",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_3_day_select",
+        "service_type": "UPS 3 Day Select\u00ae",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 35.52,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Wednesday 8/26 by 11:00 PM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 2,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-26T23:00:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 46.1,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201839",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_2nd_day_air",
+        "service_type": "UPS 2nd Day Air\u00ae",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 46.1,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Wednesday 8/26 by 10:30 AM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 2,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-26T10:30:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 84.63,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201840",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_2nd_day_air_am",
+        "service_type": "UPS 2nd Day Air AM\u00ae",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 84.63,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Tuesday 8/25 by 11:00 PM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 1,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-25T23:00:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 143.91,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201838",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_next_day_air_saver",
+        "service_type": "UPS Next Day Air Saver\u00ae",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 143.91,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      },
+      {
+        "carrier_code": "ups",
+        "carrier_delivery_days": "Tuesday 8/25 by 10:30 AM",
+        "carrier_friendly_name": "UPS",
+        "carrier_id": "se-30719",
+        "carrier_nickname": null,
+        "carrier_weight": null,
+        "confirmation_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "delivery_days": 1,
+        "display_scheme": null,
+        "error_messages": [],
+        "estimated_delivery_date": "2026-08-25T10:30:00Z",
+        "guaranteed_service": true,
+        "insurance_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "negotiated_rate": false,
+        "other_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "package_type": null,
+        "rate_details": [
+          {
+            "amount": {
+              "amount": 164.52,
+              "currency": "usd"
+            },
+            "billing_source": "Carrier",
+            "carrier_billing_code": "BaseServiceCharge",
+            "carrier_description": "Shipping",
+            "carrier_memo": null,
+            "rate_detail_type": "shipping"
+          }
+        ],
+        "rate_id": "se-749201836",
+        "rate_type": "shipment",
+        "requested_comparison_amount": {
+          "amount": 0.0,
+          "currency": "usd"
+        },
+        "service_code": "ups_next_day_air",
+        "service_type": "UPS Next Day Air\u00ae",
+        "ship_date": "2026-08-24T00:00:00Z",
+        "shipping_amount": {
+          "amount": 164.52,
+          "currency": "usd"
+        },
+        "trackable": true,
+        "validation_status": "valid",
+        "warning_messages": [],
+        "zone": null
+      }
+    ],
+    "shipment_id": "se-406979865",
+    "status": "completed"
+  },
+  "requested_shipment_service": null,
+  "retail_rate": null,
+  "return_to": {
+    "address_line1": "215 Clayton St",
+    "address_line2": null,
+    "address_line3": null,
+    "address_residential_indicator": "no",
+    "city_locality": "San Francisco",
+    "company_name": null,
+    "country_code": "US",
+    "email": null,
+    "geolocation": null,
+    "instructions": null,
+    "name": "Sender",
+    "phone": "REDACTED",
+    "postal_code": "94117",
+    "state_province": "CA"
+  },
+  "sender_info": null,
+  "service_code": null,
+  "ship_by_date": null,
+  "ship_date": "2026-08-24T00:00:00Z",
+  "ship_datetime": null,
+  "ship_from": {
+    "address_line1": "215 Clayton St",
+    "address_line2": null,
+    "address_line3": null,
+    "address_residential_indicator": "no",
+    "city_locality": "San Francisco",
+    "company_name": null,
+    "country_code": "US",
+    "email": null,
+    "geolocation": null,
+    "instructions": null,
+    "name": "Sender",
+    "phone": "REDACTED",
+    "postal_code": "94117",
+    "state_province": "CA"
+  },
+  "ship_to": {
+    "address_line1": "1 ROCKEFELLER PLZ",
+    "address_line2": "",
+    "address_line3": null,
+    "address_residential_indicator": "unknown",
+    "city_locality": "NEW YORK",
+    "company_name": null,
+    "country_code": "US",
+    "email": null,
+    "geolocation": null,
+    "instructions": "",
+    "name": "Recipient",
+    "phone": "REDACTED",
+    "postal_code": "10020-2003",
+    "state_province": "NY"
+  },
+  "shipment_id": "se-406979865",
+  "shipment_number": null,
+  "shipment_status": "pending",
+  "shipping_paid": null,
+  "shipping_rule_id": null,
+  "store_id": "se-4693623",
+  "tags": [],
+  "tax_paid": null,
+  "total_weight": {
+    "unit": "ounce",
+    "value": 56.0
+  },
+  "warehouse_id": null,
+  "zone": null
+}
