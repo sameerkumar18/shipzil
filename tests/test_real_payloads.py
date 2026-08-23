@@ -329,3 +329,63 @@ class TestEasyPostOrderBuy:
         assert seen["json"] == {"carrier": "USPS", "service": "GroundAdvantage"}
         assert seen["retries"] == 0
         assert len(label.parcel_labels) == 2
+
+
+class TestEasyshipLabel:
+    """Captured from a live sandbox purchase, after three wrong attempts.
+
+    Each failure came from trusting prose over the schema:
+      1. POST /shipments/{id}/labels               -> endpoint does not exist
+      2. courier_selection.selected_courier_id    -> property not in ShipmentCreate
+      3. top-level courier_service_id             -> real, but nested in courier_settings
+
+    And two data requirements only purchase enforces, not rating: a company name
+    on both addresses, and tracking living in a `trackings` array.
+    """
+
+    def test_label_is_generated_and_has_a_document(self) -> None:
+        rec = load("es_label.json")
+        rec = rec.get("shipment") or rec
+        assert rec["label_state"] == "generated"
+        labels = [d for d in rec["shipping_documents"] if d.get("category") == "label"]
+        assert labels and labels[0]["url"]
+
+    def test_tracking_comes_from_the_trackings_array(self) -> None:
+        """There is no flat tracking_number; reading one yields ''."""
+        rec = load("es_label.json")
+        inner = rec.get("shipment") or rec
+        assert "tracking_number" not in inner, "no flat field exists at the top level"
+        legs = inner["trackings"]
+        assert legs and legs[0]["tracking_number"]
+        assert "leg_number" in legs[0]
+
+    def test_parser_extracts_tracking_and_label_url(self) -> None:
+        from decimal import Decimal
+
+        from shipzil.models import Rate
+        from shipzil.providers import EasyshipAdapter
+
+        adapter = EasyshipAdapter("sand_x")
+        rate = Rate(carrier="FedEx", service="FedEx 2Day", amount=Decimal("19.55"),
+                    currency="USD", provider="easyship")
+        label = adapter._parse_label(load("es_label.json"), fallback_id="ESUS1", rate=rate)
+        assert label.tracking_number, "tracking must not be empty"
+        assert label.label_url.startswith("http")
+        assert label.is_test is True
+
+    def test_purchase_refuses_without_company_names(self) -> None:
+        """Rating works without them; purchase does not. Refuse, do not invent."""
+        from decimal import Decimal
+
+        from shipzil.errors import LabelPurchaseError
+        from shipzil.models import Address, Parcel, Rate, Shipment
+        from shipzil.providers import EasyshipAdapter
+        from shipzil.units import Dimensions, Weight
+
+        a = Address(street1="215 Clayton St", city="San Francisco", state="CA", postal_code="94117")
+        b = Address(street1="1 Rockefeller Plaza", city="New York", state="NY", postal_code="10020")
+        sh = Shipment(a, b, (Parcel(weight=Weight.of(16, "oz"),
+                                    dimensions=Dimensions.of(10, 8, 4, "in")),))
+        rate = Rate(carrier="FedEx", service="x", amount=Decimal("1"), provider="easyship")
+        with pytest.raises(LabelPurchaseError, match="company name"):
+            EasyshipAdapter("sand_x").buy(sh, rate)

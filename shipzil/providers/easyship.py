@@ -177,45 +177,66 @@ class EasyshipAdapter(Adapter):
     # ── buying ──────────────────────────────────────────────────────
 
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
-        """Create the shipment, confirm it via `batch_labels`, then poll.
+        """One call: create the shipment and buy its label synchronously.
 
-        The first implementation of this method called
-        `POST /shipments/{id}/labels`, **which does not exist**, and its docstring
-        asserted that endpoint was synchronous while the batch endpoint was "the
-        asynchronous one and is deliberately unused". Both halves were invented.
-        The live API answers that path with "The requested endpoint does not
-        exist. The request does not comply with the OpenAPI Specification."
+        This took three wrong attempts, all from trusting prose over the schema:
 
-        What 2024-09 actually offers, per Easyship's own OpenAPI index:
+        1. `POST /shipments/{id}/labels` — **does not exist.** The docstring also
+           claimed it was synchronous and that the batch endpoint was "the
+           asynchronous one and is deliberately unused". Invented both ways.
+        2. `courier_selection: {selected_courier_id}` — rejected,
+           "ShipmentCreate does not define properties: courier_selection".
+        3. Top-level `courier_service_id` — also rejected, even though the prose
+           documentation says to "assign a courier to the shipment using
+           `courier_service_id`". It is real but **nested** under
+           `courier_settings`.
 
-        * `POST /shipments` creates a shipment, which starts at
-          `label_state: "not_created"`.
-        * `POST /batch_labels` (operationId `batch_labels_create`) confirms one
-          or more shipments and *begins* generating documents. It requires a
-          `shipments` array and takes an optional `courier_service_id`.
-        * Generation is **asynchronous**. `label_state` moves through
-          `not_created -> pending -> generated | failed`. There is no synchronous
-          single-label endpoint at all.
+        The actual `ShipmentCreate` schema, read from the OpenAPI definition:
 
-        shipzil is synchronous, so this polls `GET /shipments/{id}` until the
-        state settles or `label_timeout` elapses, and raises rather than handing
-        back a label that does not exist yet.
+        * `courier_settings.courier_service_id` selects the service.
+        * `shipping_settings.buy_label` and `shipping_settings.buy_label_synchronous`
+          buy the label during creation and wait for it. So there is no need for
+          `POST /batch_labels` and its `not_created -> pending -> generated`
+          polling at all, which is what an earlier version of this method built.
+        * Only `parcels` is required.
 
-        Not verified live: the Easyship sandbox plan allowance is spent. This is
-        built from the published specification, which is exactly the weaker
-        evidence that produced the bug above, so treat it as unproven.
+        A second label request for a shipment already labelled is refused with
+        "labels already requested", which is Easyship's structural protection
+        against a duplicate purchase.
         """
         parcel = shipment.parcels[0]
+        # Purchase validates addresses more strictly than rating does: rating
+        # succeeds without a company name, creation rejects a blank one with
+        # "origin_address.company_name can't be blank". shipzil will not
+        # substitute the contact name, because a company name is a declaration
+        # about who is shipping, so it says what is missing instead.
+        missing = [
+            label
+            for label, addr in (("from_address", shipment.from_address),
+                                ("to_address", shipment.to_address))
+            if not (addr.company or "").strip()
+        ]
+        if missing:
+            raise LabelPurchaseError(
+                "easyship requires a company name on both addresses when buying a label, "
+                f"and {' and '.join(missing)} has none. Rating does not need it, so this "
+                "only surfaces at purchase. Set Address(company=...).",
+                provider=self.name,
+            )
         service_id = (rate.service_code or "").strip()
         payload: dict[str, Any] = {
             "origin_address": _address(shipment.from_address),
             "destination_address": _address(shipment.to_address),
             "parcels": [self._parcel(parcel)],
-            "shipping_settings": {"units": {"weight": "kg", "dimensions": "cm"}},
+            "shipping_settings": {
+                "units": {"weight": "kg", "dimensions": "cm"},
+                "buy_label": True,
+                "buy_label_synchronous": True,
+            },
             "incoterms": "DDU",
         }
         if service_id:
-            payload["courier_selection"] = {"selected_courier_id": service_id}
+            payload["courier_settings"] = {"courier_service_id": service_id}
 
         _status, created = request(
             "POST", self._url("/shipments"), headers=self._headers, json=payload,
@@ -226,22 +247,23 @@ class EasyshipAdapter(Adapter):
         if not shipment_id:
             raise LabelPurchaseError("easyship created no shipment id", provider=self.name)
 
-        leg: dict[str, Any] = {"easyship_shipment_id": shipment_id}
-        if service_id:
-            leg["courier_service_id"] = service_id
-        request(
-            "POST", self._url("/batch_labels"),
-            headers=self._headers, json={"shipments": [leg]},
-            timeout=self.timeout, provider=self.name, retries=0,
-        )
+        state = str(record.get("label_state") or "")
+        if state == "generated":
+            return self._parse_label(created, fallback_id=shipment_id, rate=rate)
+        if state == "failed":
+            raise LabelPurchaseError(
+                f"easyship label generation failed for {shipment_id}", provider=self.name
+            )
+        # buy_label_synchronous should have settled it. If the account is
+        # configured to defer anyway, wait rather than return a labelless label.
         return self._await_label(shipment_id, rate)
 
     def _await_label(self, shipment_id: str, rate: Rate) -> Label:
-        """Poll until label_state settles. Async generation, synchronous surface."""
+        """Bounded poll, for when the synchronous flag did not settle the state."""
         deadline = time.monotonic() + self.label_timeout
-        state = "pending"
-        body: dict[str, Any] = {}
+        state = ""
         while time.monotonic() < deadline:
+            time.sleep(self.poll_interval)
             _status, body = request(
                 "GET", self._url(f"/shipments/{shipment_id}"),
                 headers=self._headers, timeout=self.timeout,
@@ -256,7 +278,6 @@ class EasyshipAdapter(Adapter):
                     f"easyship label generation failed for {shipment_id}",
                     provider=self.name,
                 )
-            time.sleep(self.poll_interval)
         raise LabelPurchaseError(
             f"easyship label for {shipment_id} was still {state or 'unknown'} after "
             f"{self.label_timeout:.0f}s. The shipment is confirmed and may still "
@@ -268,7 +289,26 @@ class EasyshipAdapter(Adapter):
         self, body: dict[str, Any], *, fallback_id: str, rate: Rate
     ) -> Label:
         record = body.get("shipment") or body
-        tracking = record.get("tracking_number") or ""
+        # There is no flat tracking_number. Easyship returns a `trackings` array,
+        # one entry per leg, each with handler / leg_number / tracking_number and
+        # a nullable local_tracking_number. Reading the non-existent flat field
+        # returned an empty tracking number on every successful purchase.
+        tracking = ""
+        legs = record.get("trackings") or []
+        for leg in sorted(
+            (t for t in legs if isinstance(t, dict)),
+            key=lambda t: t.get("leg_number") or 0,
+        ):
+            tracking = str(
+                leg.get("tracking_number")
+                or leg.get("local_tracking_number")
+                or leg.get("alternate_tracking_number")
+                or ""
+            )
+            if tracking:
+                break
+        if not tracking:
+            tracking = str(record.get("tracking_number") or "")
         docs = record.get("shipping_documents") or []
         url = ""
         for doc in docs:

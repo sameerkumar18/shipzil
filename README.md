@@ -117,7 +117,7 @@ against live credentials on all five surfaces. Purchasing is not:
 | Shippo | live-verified | live-verified (test token, buy and void) |
 | ShipStation v2 | live-verified | route verified, purchase **never run** — production keys only |
 | ShipStation v1 | live-verified | live-verified via `testLabel` (no charge) |
-| Easyship | live-verified | **never run live**, and rebuilt from spec after the first attempt called a nonexistent endpoint |
+| Easyship | live-verified | live-verified (sandbox) |
 
 ShipStation v1's purchase path was verified through `testLabel: true`, which
 returns a real label response without buying postage — confirmed by an unchanged
@@ -232,7 +232,7 @@ Shipped:
   no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 65 tests, including parser tests against captured real payloads and provider SDK traffic
+- 69 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 
@@ -284,6 +284,15 @@ the same assumption as the parser it is checking, so it cannot catch a wrong
 field name. The Easyship carrier mapping read two fields that do not exist and
 returned an empty carrier on every single rate, and its hand-written test
 passed the whole time.
+
+## Adding a provider
+
+One file. Nothing in `shipzil/` changes — implement `rate_single` and `buy` on a
+subclass of `Adapter` and you inherit multi-parcel fan-out, exclusion
+de-duplication, `max_spend`, `dry_run`, and the refusal to buy a synthesized
+rate. No core module branches on a provider name. Full contract, and the two
+places you may legitimately have to touch shared code, in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing
 
