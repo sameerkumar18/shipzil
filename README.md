@@ -100,10 +100,26 @@ client = shipzil.Client(ShippoAdapter(api_key))   # same Shipment, same call
 | ShipStation v2 | yes | native, `packages[]` | yes | yes | best exclusion reporting |
 | Shippo | yes | emulated | yes | yes | reports failures as HTTP 201 |
 | Easyship | yes | emulated | yes | yes | only surface that packs items into a box |
-| ShipStation v1 | planned | emulated | planned | planned | see [roadmap](#roadmap) |
+| ShipStation v1 | yes | emulated | yes | yes | no currency or delivery estimate; rates one carrier per call |
 
 "Emulated" means shipzil rates each parcel and combines them, and labels the
 result so you know it was combined rather than quoted. More on that below.
+
+**"Yes" means implemented, which is not the same as proven.** Rating is verified
+against live credentials on all five surfaces. Purchasing is not:
+
+| | Rating | Purchase |
+|---|---|---|
+| EasyPost | live-verified | live-verified (test key) |
+| Shippo | live-verified | live-verified (test token, buy and void) |
+| ShipStation v2 | live-verified | **never run live** — production keys only |
+| ShipStation v1 | live-verified | **never run live** — production keys only |
+| Easyship | live-verified | **never run live** — sandbox quota spent |
+
+ShipStation v1 does accept `testLabel: true`, which returns a label without
+buying postage, and the adapter defaults to it. That still hasn't been exercised,
+because on production credentials a flag that turns out to be ignored costs real
+money.
 
 ## What "honest" means here concretely
 
@@ -208,14 +224,14 @@ Shipped:
 - Easyship, including item-to-box packing
 - Multi-parcel emulation for the four surfaces that lack it
 - Buy and void, spend limits, `dry_run`
+- ShipStation v1, the legacy surface: rates per carrier and merges, and reports
+  no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 54 tests, including parser tests against captured real payloads
+- 61 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 
-- **ShipStation v1**, the last unbuilt surface. Poor rate shape, single-parcel
-  only, but a lot of ShipStation users are still on it.
 - **PyPI release** as v0.2.0, so the install instructions above get shorter.
   The name is currently unclaimed, not reserved.
 - **Failover**, `Client(primary=..., fallback=[...])`.

@@ -1,0 +1,116 @@
+[
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Thick Envelope",
+    "shipmentCost": 11.41
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Package",
+    "shipmentCost": 11.41
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Medium Flat Rate Box",
+    "shipmentCost": 19.98
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Small Flat Rate Box",
+    "shipmentCost": 10.59
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Large Flat Rate Box",
+    "shipmentCost": 27.76
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Flat Rate Envelope",
+    "shipmentCost": 9.62
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Flat Rate Padded Envelope",
+    "shipmentCost": 11.02
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail",
+    "serviceName": "USPS Priority Mail - Legal Flat Rate Envelope",
+    "shipmentCost": 10.91
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail_express",
+    "serviceName": "USPS Priority Mail Express - Thick Envelope",
+    "shipmentCost": 55.79
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail_express",
+    "serviceName": "USPS Priority Mail Express - Package",
+    "shipmentCost": 55.79
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail_express",
+    "serviceName": "USPS Priority Mail Express - Flat Rate Envelope",
+    "shipmentCost": 31.11
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail_express",
+    "serviceName": "USPS Priority Mail Express - Flat Rate Padded Envelope",
+    "shipmentCost": 31.7
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_priority_mail_express",
+    "serviceName": "USPS Priority Mail Express - Legal Flat Rate Envelope",
+    "shipmentCost": 31.43
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_media_mail",
+    "serviceName": "USPS Media Mail - Thick Envelope",
+    "shipmentCost": 4.39
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_media_mail",
+    "serviceName": "USPS Media Mail - Package",
+    "shipmentCost": 4.39
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_parcel_select",
+    "serviceName": "USPS Parcel Select Ground - Thick Envelope",
+    "shipmentCost": 10.01
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_parcel_select",
+    "serviceName": "USPS Parcel Select Ground - Package",
+    "shipmentCost": 10.01
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_ground_advantage",
+    "serviceName": "USPS Ground Advantage - Thick Envelope",
+    "shipmentCost": 10.01
+  },
+  {
+    "otherCost": 0.0,
+    "serviceCode": "usps_ground_advantage",
+    "serviceName": "USPS Ground Advantage - Package",
+    "shipmentCost": 10.01
+  }
+]

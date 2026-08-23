@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -123,3 +124,80 @@ class TestOtherProvidersRealRates:
         assert rates
         for rate in rates:
             assert rate.amount > 0
+
+
+class TestShipStationV1RealRates:
+    """v1's rate object has exactly four fields and no currency.
+
+    Captured live, so if v1 ever starts sending a currency or delivery estimate
+    these assertions fail and the capability flags get revisited.
+    """
+
+    def _adapter(self) -> Any:
+        from shipzil.providers import ShipStationV1Adapter
+
+        return ShipStationV1Adapter("k", "s")
+
+    def test_rate_object_is_still_only_four_fields(self) -> None:
+        rows = load("ss1_rates_single.json")
+        assert rows
+        for row in rows:
+            assert set(row) == {"serviceCode", "serviceName", "shipmentCost", "otherCost"}, (
+                f"v1 rate shape changed: {sorted(row)}"
+            )
+
+    def test_amount_is_shipment_plus_other_cost(self) -> None:
+        adapter = self._adapter()
+        for row in load("ss1_rates_single.json"):
+            rate = adapter._parse_rate(row, "stamps_com")
+            expected = Decimal(str(row["shipmentCost"])) + Decimal(str(row["otherCost"]))
+            assert rate.amount == expected
+            # Quoting shipmentCost alone is the bug this guards against.
+            assert rate.amount >= Decimal(str(row["shipmentCost"]))
+
+    def test_other_cost_is_actually_added(self) -> None:
+        """Constructed, because the captured fixture cannot test this.
+
+        Every `otherCost` in the live sample is 0.0, so `shipmentCost + otherCost`
+        and `shipmentCost` alone are indistinguishable against it. The
+        surcharge case needs data that exercises it, otherwise the test only
+        appears to cover the arithmetic.
+        """
+        adapter = self._adapter()
+        rate = adapter._parse_rate(
+            {
+                "serviceCode": "usps_priority_mail",
+                "serviceName": "USPS Priority Mail",
+                "shipmentCost": 11.41,
+                "otherCost": 2.59,
+            },
+            "stamps_com",
+        )
+        assert rate.amount == Decimal("14.00")
+
+    def test_currency_and_delivery_days_stay_none(self) -> None:
+        adapter = self._adapter()
+        for row in load("ss1_rates_single.json"):
+            rate = adapter._parse_rate(row, "stamps_com")
+            # v1 sends neither. Defaulting to USD would be an invention.
+            assert rate.currency is None
+            assert rate.delivery_days is None
+
+    def test_carrier_code_is_preserved_for_purchase(self) -> None:
+        adapter = self._adapter()
+        for row in load("ss1_rates_single.json"):
+            rate = adapter._parse_rate(row, "ups_walleted")
+            # buy() needs carrierCode and v1 does not echo it on the rate.
+            assert rate.raw["_carrier_code"] == "ups_walleted"
+            assert rate.carrier == "ups_walleted"
+
+    def test_capabilities_match_the_captured_reality(self) -> None:
+        caps = self._adapter().capabilities
+        assert caps.returns_currency is False
+        assert caps.returns_delivery_estimate is False
+        assert caps.native_multi_parcel is False
+        assert caps.emulates_multi_parcel is True
+
+    def test_test_labels_default_on_because_creds_are_production(self) -> None:
+        assert self._adapter().test_labels is True
+        assert self._adapter().is_test_credential() is False

@@ -1,0 +1,22 @@
+[
+  {
+    "accountNumber": null,
+    "balance": 0.0,
+    "code": "stamps_com",
+    "name": "Stamps.com",
+    "nickname": "Free",
+    "primary": true,
+    "requiresFundedAccount": true,
+    "shippingProviderId": 30718
+  },
+  {
+    "accountNumber": null,
+    "balance": 0.0,
+    "code": "ups_walleted",
+    "name": "UPS by ShipStation",
+    "nickname": null,
+    "primary": true,
+    "requiresFundedAccount": true,
+    "shippingProviderId": 30719
+  }
+]

@@ -221,6 +221,59 @@ top-level `courier_name` — that field exists and is `null`.
 `shipping_settings.units = {weight: "kg", dimensions: "cm"}`, unlike the others
 which take units inline per field or fix them per endpoint.
 
+## ShipStation v1 rates one carrier at a time
+
+`carrierCode` is required on `POST /shipments/getrates`, so there is no
+"rate my account" call. A comparable list means one request per connected
+carrier, merged. Confirmed live: 2 connected carriers (`stamps_com`,
+`ups_walleted`) produce 27 rates across 2 calls, and the account's carrier list
+costs a third.
+
+That interacts badly with the documented 40 req/min: a single multi-parcel
+rate is `1 + carriers × parcels` requests. Three parcels across two carriers is
+seven. `ShipStationV1Adapter(carriers=(...))` bounds it, and the adapter caches
+the carrier list per instance. When a 429 does arrive mid-loop the adapter stops
+rather than continuing to collect them, and names the carriers it never reached.
+
+v1 also needs less to rate than any other surface — `fromPostalCode` alone for
+origin, with no street address anywhere.
+
+### The rate object has four fields, verified
+
+```
+{"serviceCode", "serviceName", "shipmentCost", "otherCost"}
+```
+
+That is the complete set, captured live and asserted in
+`tests/test_real_payloads.py`. Two consequences:
+
+* **No currency, no delivery estimate.** `returns_currency` and
+  `returns_delivery_estimate` are both False and `Rate` leaves them None.
+  Defaulting to USD would be an invention.
+* **Cost is `shipmentCost + otherCost`.** `otherCost` carries surcharges, so
+  quoting `shipmentCost` alone understates the price. Worth knowing: every
+  `otherCost` in the captured sample is `0.0`, which means that fixture *cannot*
+  detect a parser that forgets the addition. The test for that arithmetic is
+  constructed on purpose.
+
+### `testLabel` is the only safe way to exercise a v1 purchase
+
+v1 accepts `testLabel: true` on label creation, returning a label response
+without buying postage. Since the only v1 credentials in practice are
+production, `ShipStationV1Adapter(test_labels=True)` is the **default**, and v1
+has no key prefix to detect test mode from, unlike EasyPost's `EZTK` or Shippo's
+`shippo_test_`. `is_test_credential()` therefore returns False always.
+
+Not yet exercised live: doing so on production credentials risks a real postage
+charge if `testLabel` is ever ignored rather than honoured.
+
+### One nice cross-surface detail
+
+v1's `/carriers` reports `shippingProviderId: 30718` for Stamps.com. That is the
+same id that appears in ShipStation **v2**'s exclusion text, "carrier 30718 does
+not support multipackage" — the two APIs share underlying carrier provider ids,
+which makes v1 and v2 responses correlatable.
+
 ## Idempotency: one provider out of four
 
 Checked against provider documentation rather than assumed, because the first
