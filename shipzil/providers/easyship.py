@@ -10,9 +10,11 @@ The odd one out, in ways that shaped the whole data model:
   `shipzil.http` always sends a real User-Agent.
 * **Every item needs `category` or `hs_code`, even domestically.** No other
   provider requires customs classification for a US-to-US parcel.
-* **It can pack for you.** Given items with weights, Easyship derives the box.
-  It is the only surface where an item-centric `Parcel` works, so
-  `requires_explicit_dimensions` is False here alone.
+* **It can pack for you.** Given items carrying their own dimensions, Easyship
+  derives the box, and it is the only surface where an item-centric `Parcel`
+  works. It still needs dimensions *somewhere* though: an item-only parcel whose
+  items have no dimensions is rejected with
+  `parcels[0].items[0].dimensions can't be blank`.
 * **Multi-parcel is rejected**: three parcels returns `422 "No shipping
   solutions available based on the information provided"`, so shipzil fans out.
 * Rates are international-first: import duty, tax, DDP handling and fuel
@@ -54,9 +56,6 @@ class EasyshipCapabilities(Capabilities):
     # Still needs dimensions, but accepts them per item instead of per box and
     # will compute the box itself. Item-only parcels whose items carry no
     # dimensions are rejected: "parcels[0].items[0].dimensions can't be blank".
-    requires_explicit_dimensions = True
-    can_derive_box_from_items = True
-    requires_item_classification = True
     returns_currency = True
     returns_delivery_estimate = True
 
@@ -172,15 +171,15 @@ class EasyshipAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """Create the shipment, then request its label synchronously.
 
         Easyship separates the two: `POST /shipments` then
         `POST /shipments/{id}/labels`, which the docs describe as retrieving the
         label synchronously. The batch endpoint is the asynchronous one and is
         deliberately unused.
-        
-        Easyship has no idempotency header, so the key is always None. It is
+
+        Easyship is
         structurally protected instead: a second label request for the same
         shipment id is refused with "labels already requested".
         """

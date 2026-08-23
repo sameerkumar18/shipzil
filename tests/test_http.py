@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from shipzil import errors, http
@@ -51,60 +49,39 @@ class TestQuotaMisclassification:
             http._raise_for_status(403, {"error": {"message": phrase}}, "x")
 
 
-class TestIdempotencyHonesty:
-    """A key is either enforced by the provider or refused. Never dropped.
+class TestNoIdempotencyConcept:
+    """shipzil takes no idempotency key, deliberately.
 
-    Before this, all four adapters took `idempotency_key` and only EasyPost put
-    it on the wire. The other three accepted the argument and discarded it,
-    which handed the caller a duplicate-purchase guarantee that did not exist.
+    Only EasyPost publishes one, and shipzil generated a fresh UUID per call,
+    which deduplicates nothing. The earlier design raised CapabilityError when
+    an explicit key was passed to the other four, which was ceremony that
+    refused to help rather than helping. Both are gone. Purchases are simply
+    never retried, and callers dedupe at their own layer on an id they own.
     """
 
-    def _client(self, adapter_cls: Any) -> Any:
+    def test_buy_signature_takes_no_key(self) -> None:
+        import inspect
+
         import shipzil
+        from shipzil.providers import Adapter
 
-        return shipzil.Client(adapter_cls("k"))
+        assert "idempotency_key" not in inspect.signature(shipzil.Client.buy).parameters
+        assert "idempotency_key" not in inspect.signature(Adapter.buy).parameters
 
-    def test_only_easypost_claims_support(self) -> None:
-        from shipzil.providers import (
-            EasyPostAdapter,
-            EasyshipAdapter,
-            ShippoAdapter,
-            ShipStationV2Adapter,
-        )
+    def test_no_adapter_advertises_idempotency_support(self) -> None:
+        from shipzil.providers import Adapter
 
-        assert EasyPostAdapter("k").supports_idempotency_key is True
-        for cls in (ShippoAdapter, ShipStationV2Adapter, EasyshipAdapter):
-            assert cls("k").supports_idempotency_key is False, cls.__name__
+        assert not hasattr(Adapter, "supports_idempotency_key")
 
-    def test_supporting_provider_generates_a_key_when_none_given(self) -> None:
-        from shipzil.providers import EasyPostAdapter
+    def test_purchases_are_never_retried(self) -> None:
+        """The one guarantee that actually holds, on every provider."""
+        import pathlib as _p
 
-        key = self._client(EasyPostAdapter)._resolve_idempotency_key(None)
-        assert key and key.startswith("shipzil-")
-
-    def test_supporting_provider_passes_through_an_explicit_key(self) -> None:
-        from shipzil.providers import EasyPostAdapter
-
-        assert self._client(EasyPostAdapter)._resolve_idempotency_key("mine") == "mine"
-
-    @pytest.mark.parametrize("name", ["ShippoAdapter", "ShipStationV2Adapter", "EasyshipAdapter"])
-    def test_explicit_key_is_refused_not_dropped(self, name: str) -> None:
-        from shipzil import providers
-
-        cls = getattr(providers, name)
-        with pytest.raises(errors.CapabilityError) as caught:
-            self._client(cls)._resolve_idempotency_key("mine")
-        msg = str(caught.value)
-        # The refusal has to be actionable, not just a denial.
-        assert "omit idempotency_key" in msg
-        assert "never retries a purchase" in msg
-
-    @pytest.mark.parametrize("name", ["ShippoAdapter", "ShipStationV2Adapter", "EasyshipAdapter"])
-    def test_no_key_is_fabricated_for_unsupporting_providers(self, name: str) -> None:
-        from shipzil import providers
-
-        cls = getattr(providers, name)
-        assert self._client(cls)._resolve_idempotency_key(None) is None
+        for name in ("easypost", "shippo", "shipstation_v1", "shipstation_v2", "easyship"):
+            src = _p.Path(f"shipzil/providers/{name}.py").read_text()
+            buy = src[src.index("    def buy("):]
+            buy = buy[: buy.index("\n    def ", 10)] if "\n    def " in buy[10:] else buy
+            assert "retries=0" in buy, f"{name}.buy must pass retries=0"
 
 
 class TestCredentialGuardsAreBools:

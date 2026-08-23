@@ -81,7 +81,9 @@ def combine_parcel_quotes(
     combined: list[Rate] = []
     partial: list[Exclusion] = []
 
-    for (carrier, _service), slots in sorted(by_service.items()):
+    # The key is lowercased for matching, so display names come off the rate
+    # itself rather than the key. Both parts of the key are unused here.
+    for (_carrier, _service), slots in sorted(by_service.items()):
         present = [r for r in slots if r is not None]
         if len(present) == parcel_count:
             combined.append(_sum_rates(present, provider=provider, parcel_count=parcel_count))

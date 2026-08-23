@@ -7,7 +7,7 @@ only through `Quote.via` for debugging.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Address:
     """A postal address. `country` is ISO 3166-1 alpha-2."""
 
@@ -49,7 +49,7 @@ class Address:
             raise ValueError(f"country must be ISO alpha-2, got {self.country!r}")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Item:
     """Contents of a parcel.
 
@@ -79,7 +79,7 @@ class Item:
             raise ValueError(f"quantity must be >= 1, got {self.quantity}")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Parcel:
     """One physical package.
 
@@ -123,7 +123,7 @@ class Parcel:
         return total
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Shipment:
     """What the caller wants to ship. `parcels` is always a list, even at one."""
 
@@ -181,7 +181,7 @@ class ExclusionCode(str, Enum):
     UNKNOWN = "unknown"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Exclusion:
     """Something that could not be rated, and why.
 
@@ -197,7 +197,7 @@ class Exclusion:
     source: Literal["provider", "shipzil"] = "provider"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Rate:
     """A price for carrying a shipment.
 
@@ -224,7 +224,7 @@ class Rate:
         return self.strategy is Strategy.FANOUT
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Quote:
     """The result of asking for rates: what worked, and what didn't."""
 
@@ -256,7 +256,7 @@ class Quote:
         return "\n".join(lines)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Label:
     """A purchased label.
 
@@ -278,5 +278,4 @@ class Label:
     shipment_id: str = ""
     #: True = test label, False = real purchase, None = undeterminable.
     is_test: bool | None = None
-    parcel_labels: tuple[Label, ...] = field(default=())
     raw: Any = None

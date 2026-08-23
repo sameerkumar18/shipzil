@@ -45,8 +45,6 @@ class ShippoCapabilities(Capabilities):
     # Verified: the array is accepted and rated as nothing. Not a capability.
     native_multi_parcel = False
     order_resource = False
-    requires_explicit_dimensions = True
-    requires_item_classification = False
     returns_currency = True
     returns_delivery_estimate = True
 
@@ -164,11 +162,9 @@ class ShippoAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """Purchase postage.
 
-        Shippo documents no idempotency header on /transactions, so the key
-        is always None here and the only protection is retries=0.
         """
         raw = rate.raw if isinstance(rate.raw, dict) else {}
         rate_id = raw.get("object_id")

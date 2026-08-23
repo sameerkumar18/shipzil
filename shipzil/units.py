@@ -41,7 +41,7 @@ def _q(value: Decimal, places: int) -> Decimal:
     return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Weight:
     """A mass with its unit. Compare and convert, never guess."""
 
@@ -50,7 +50,9 @@ class Weight:
 
     def __post_init__(self) -> None:
         if self.unit not in _TO_GRAMS:
-            raise ValueError(f"unknown weight unit {self.unit!r}; expected one of {sorted(_TO_GRAMS)}")
+            raise ValueError(
+                f"unknown weight unit {self.unit!r}; expected one of {sorted(_TO_GRAMS)}"
+            )
         if self.value <= 0:
             raise ValueError(f"weight must be positive, got {self.value}")
 
@@ -71,7 +73,7 @@ class Weight:
         return Weight(_q(self.to(self.unit) + other.to(self.unit), 4), self.unit)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Dimensions:
     """Box dimensions with their unit. Order is length, width, height."""
 

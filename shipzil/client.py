@@ -10,7 +10,6 @@ Responsibilities:
 
 from __future__ import annotations
 
-import uuid
 from decimal import Decimal
 
 from .errors import CapabilityError, ConfigurationError, SpendLimitExceeded
@@ -62,7 +61,7 @@ class Client:
         return combine_parcel_quotes(
             per_parcel,
             provider=self.adapter.name,
-            via=f"{self.adapter.name}:fanout×{len(shipment.parcels)}",
+            via=f"{self.adapter.name}:fanoutx{len(shipment.parcels)}",
         )
 
     # ── buying ──────────────────────────────────────────────────────
@@ -71,8 +70,6 @@ class Client:
         self,
         shipment: Shipment,
         rate: Rate,
-        *,
-        idempotency_key: str | None = None,
     ) -> Label:
         """Purchase postage for `rate`.
 
@@ -109,33 +106,7 @@ class Client:
                 raw={"dry_run": True, "rate": rate.raw},
             )
 
-        key = self._resolve_idempotency_key(idempotency_key)
-        return self.adapter.buy(shipment, rate, idempotency_key=key)
-
-    def _resolve_idempotency_key(self, requested: str | None) -> str | None:
-        """Decide what key, if any, reaches the adapter.
-
-        Only EasyPost can honour one. Passing a key to the others and dropping
-        it would hand the caller a guarantee that does not exist, so an explicit
-        key against an unsupporting provider is refused up front instead.
-
-        Purchases are never retried on any provider, which is a real protection
-        against the duplicate-charge case that matters most. It just isn't the
-        same as provider-side deduplication, and shipzil will not conflate them.
-        """
-        if self.adapter.supports_idempotency_key:
-            return requested or f"shipzil-{uuid.uuid4()}"
-
-        if requested is not None:
-            raise CapabilityError(
-                f"{self.adapter.name} cannot honour an idempotency key: it publishes no such "
-                "header, so shipzil would have to discard the one you passed and let you believe "
-                "a repeat purchase is safe. shipzil never retries a purchase, which covers the "
-                "common case. If you accept that weaker guarantee, omit idempotency_key. "
-                "Check adapter.supports_idempotency_key to branch on this.",
-                provider=self.adapter.name,
-            )
-        return None
+        return self.adapter.buy(shipment, rate)
 
     def void(self, label: Label) -> bool:
         if self.dry_run:

@@ -42,8 +42,6 @@ BASE = "https://api.shipstation.com/v2"
 class ShipStationV2Capabilities(Capabilities):
     native_multi_parcel = True  # verified: 3 packages -> 7 real rates
     order_resource = False
-    requires_explicit_dimensions = True
-    requires_item_classification = False
     returns_currency = True
     returns_delivery_estimate = True
 
@@ -204,12 +202,12 @@ class ShipStationV2Adapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """Purchase from a previously returned `rate_id`.
 
         Never exercised against live credentials in this repo's test suite: the
         only ShipStation keys available are production.
-        
+
         ShipStation v2 documents exactly two headers (API-Key, Content-Type),
         so the key is always None here and the only protection is retries=0.
         """

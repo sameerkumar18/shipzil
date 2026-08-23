@@ -23,7 +23,8 @@ from .errors import AuthenticationError, ProviderError, RateLimitError, Validati
 USER_AGENT = "shipzil/0.1 (+https://shipzil.com)"
 
 # Retried only for methods that are safe to repeat. Label purchases are never
-# retried here — that decision needs idempotency keys and lives in the client.
+# retried here: a repeat could buy postage twice, and shipzil offers no
+# idempotency key to make that safe. Purchases pass retries=0.
 _RETRY_STATUSES = frozenset({429, 502, 503, 504})
 
 
@@ -164,7 +165,8 @@ def _describe(parsed: Any) -> str:
         # ShipEngine / ShipStation v2: {"errors": [{"message": ...}]}
         errors = parsed.get("errors")
         if isinstance(errors, list) and errors:
-            return "; ".join(str(e.get("message") if isinstance(e, dict) else e) for e in errors)[:600]
+            texts = [str(e.get("message") if isinstance(e, dict) else e) for e in errors]
+            return "; ".join(texts)[:600]
         if "detail" in parsed:
             return str(parsed["detail"])[:400]
     return str(parsed)[:400]

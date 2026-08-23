@@ -21,22 +21,16 @@ __all__ = ["Adapter", "Capabilities"]
 class Capabilities:
     """What a provider surface can actually do.
 
-    Defaults are the conservative case. Values here are asserted by
-    `scripts/probe_capabilities.py` against live sandboxes rather than taken from
-    documentation, which was wrong about multi-parcel for two providers.
+    Deliberately small: a flag nothing reads is documentation wearing a type.
+    Dimension and classification requirements are enforced in each adapter's
+    own pre-flight check, which is the single source of truth for them, and
+    described in docs/API-REALITY.md.
     """
 
     #: Rates several parcels in one call.
     native_multi_parcel: bool = False
     #: Has a distinct resource for multi-parcel (EasyPost /orders).
     order_resource: bool = False
-    #: Needs dimensions somewhere — on the box, or on every item.
-    requires_explicit_dimensions: bool = True
-    #: Can compute the box itself from per-item dimensions or stored SKUs.
-    #: Only Easyship. Everyone else needs a box on the parcel.
-    can_derive_box_from_items: bool = False
-    #: Requires customs classification even domestically (Easyship).
-    requires_item_classification: bool = False
     #: Populates Rate.currency.
     returns_currency: bool = True
     #: Populates Rate.delivery_days.
@@ -55,21 +49,6 @@ class Adapter(ABC):
     name: str = ""
     capabilities: Capabilities = Capabilities()
 
-    #: Whether the provider accepts a client-supplied idempotency key on
-    #: purchase and will collapse a repeat into the original label.
-    #:
-    #: **Only EasyPost does.** Verified against provider documentation, not
-    #: assumed: Shippo documents no such header on `/transactions` (its
-    #: "idempotency key" is internal billing reconciliation), and ShipStation
-    #: v2 documents exactly two headers, `API-Key` and `Content-Type`.
-    #: Easyship has no key either, but is structurally protected — a second
-    #: label request for the same shipment id is refused with "labels already
-    #: requested". See docs/API-REALITY.md.
-    #:
-    #: shipzil refuses an explicit key rather than accepting one it cannot
-    #: honour. Silently dropping it would be the exact failure this library
-    #: exists to surface.
-    supports_idempotency_key: bool = False
 
     @abstractmethod
     def rate_single(self, shipment: Shipment) -> Quote:
@@ -89,26 +68,17 @@ class Adapter(ABC):
         )
 
     def is_test_mode(self) -> bool | None:
-        """Whether this adapter is operating against test credentials.
-
-        Returns None when the provider gives no way to tell. Reporting False in
-        that case would assert "these are production credentials" on no evidence,
-        so the uncertainty is passed through to `Label.is_test` instead.
-        """
+        """True/False where determinable, None where the provider gives no hint."""
         return None
 
     @abstractmethod
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
-        """Purchase postage.
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
+        """Purchase postage. Never retried: every implementation sends retries=0.
 
-        `idempotency_key` is only ever non-None when
-        `supports_idempotency_key` is True; the client enforces that. Adapters
-        that cannot honour a key receive None so the parameter can never be
-        accepted and quietly discarded.
-
-        No adapter may retry a purchase. Every implementation passes
-        `retries=0`, because a repeat without provider-side deduplication risks
-        buying postage twice.
+        shipzil takes no idempotency key. Only EasyPost publishes one, and a key
+        generated per call deduplicates nothing, so offering the parameter would
+        promise more than it delivers. Deduplicate at your own layer, keyed on
+        something you own like an order id. See docs/API-REALITY.md.
         """
 
     def void(self, label: Label) -> bool:

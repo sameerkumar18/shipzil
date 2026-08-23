@@ -15,6 +15,7 @@ import pytest
 import shipzil
 from shipzil.models import Exclusion, ExclusionCode, Quote, Rate, Strategy
 from shipzil.multiparcel import combine_parcel_quotes
+from shipzil.normalize import code_from_provider_code, code_from_text
 
 # ── units ───────────────────────────────────────────────────────────
 
@@ -103,7 +104,7 @@ def test_fanout_sums_only_services_that_cover_every_parcel():
         Quote(rates=(_rate("USPS", "Ground", 12), _rate("UPS", "Ground", 18))),
         Quote(rates=(_rate("USPS", "Ground", 8),)),
     ]
-    combined = combine_parcel_quotes(quotes, provider="test", via="test:fanout×3")
+    combined = combine_parcel_quotes(quotes, provider="test", via="test:fanoutx3")
 
     assert [(r.carrier, str(r.amount)) for r in combined.rates] == [("USPS", "30")]
     only = combined.rates[0]
@@ -192,7 +193,11 @@ def test_single_parcel_passes_straight_through():
 def test_a_quote_with_no_rates_still_explains_itself():
     q = Quote(
         excluded=(
-            Exclusion(ExclusionCode.MULTIPACKAGE_NOT_SUPPORTED, "usps cannot multipackage", carrier="usps"),
+            Exclusion(
+                ExclusionCode.MULTIPACKAGE_NOT_SUPPORTED,
+                "usps cannot multipackage",
+                carrier="usps",
+            ),
         ),
         via="shipstation_v2:rates",
     )
@@ -311,7 +316,6 @@ def test_live_easypost_refuses_item_only_parcels_with_a_reason():
 
 # ── normalisation: prose to the ShipStation v2 vocabulary ───────────
 
-from shipzil.normalize import code_from_provider_code, code_from_text
 
 
 def test_provider_codes_are_taken_verbatim():

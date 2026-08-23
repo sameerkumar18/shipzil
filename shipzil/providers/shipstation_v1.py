@@ -56,8 +56,6 @@ BASE = "https://ssapi.shipstation.com"
 class ShipStationV1Capabilities(Capabilities):
     native_multi_parcel = False  # verified: 3 parcels -> HTTP 400
     order_resource = False
-    requires_explicit_dimensions = True
-    requires_item_classification = False
     returns_currency = False  # v1 sends no currency field at all
     returns_delivery_estimate = False  # nor any delivery estimate
 
@@ -65,8 +63,6 @@ class ShipStationV1Capabilities(Capabilities):
 class ShipStationV1Adapter(Adapter):
     name = "shipstation_v1"
     capabilities = ShipStationV1Capabilities()
-    # v1 publishes no idempotency header.
-    supports_idempotency_key = False
 
     def __init__(
         self,
@@ -192,7 +188,7 @@ class ShipStationV1Adapter(Adapter):
             except RateLimitError as exc:
                 # 40 req/min, and one request per carrier. Continuing would just
                 # collect more 429s, so stop and report the carriers not reached.
-                unreached = [c for c in codes[codes.index(code) :]]
+                unreached = list(codes[codes.index(code) :])
                 excluded.append(
                     Exclusion(
                         code=ExclusionCode.RATE_LIMITED,
@@ -222,7 +218,7 @@ class ShipStationV1Adapter(Adapter):
         return Quote(
             rates=tuple(rates),
             excluded=tuple(excluded),
-            via=f"{self.name}:getrates×{len(codes)}",
+            via=f"{self.name}:getratesx{len(codes)}",
             strategy=Strategy.NATIVE,
         )
 
@@ -298,11 +294,9 @@ class ShipStationV1Adapter(Adapter):
 
     # ── purchase ────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """Create a label via `POST /shipments/createlabel`.
 
-        v1 publishes no idempotency header, so the key is always None here and
-        the only protection is `retries=0`.
 
         When `test_labels` is True this sends `testLabel: true`, which returns a
         real label response without purchasing postage.

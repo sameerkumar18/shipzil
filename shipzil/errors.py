@@ -74,13 +74,13 @@ class AmbiguousPurchaseError(LabelPurchaseError):
     """A buy may or may not have succeeded, and we could not determine which.
 
     The dangerous case: a timeout after the request reached the provider. Retrying
-    risks double-buying real postage, so this is surfaced rather than retried, and
-    carries whatever identifiers exist to reconcile by hand.
-    """
+    risks double-buying real postage, so this is surfaced rather than retried.
 
-    def __init__(self, message: str, *, provider: str = "", idempotency_key: str = "", **kw: object):
-        super().__init__(message, provider=provider, messages=kw.get("messages"))  # type: ignore[arg-type]
-        self.idempotency_key = idempotency_key
+    **Nothing raises this yet.** It is exported because the state is real and
+    callers should be able to catch it, but shipzil does not currently detect a
+    purchase timeout and distinguish it from an outright failure. Until it does,
+    a timed-out `buy()` surfaces as a plain `ProviderError`.
+    """
 
 
 class SpendLimitExceeded(ShipzilError):

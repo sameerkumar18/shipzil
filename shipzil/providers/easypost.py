@@ -36,16 +36,12 @@ BASE = "https://api.easypost.com/v2"
 class EasyPostCapabilities(Capabilities):
     native_multi_parcel = False  # /shipments silently ignores a parcels array
     order_resource = True  # but /orders does it properly
-    requires_explicit_dimensions = True
-    requires_item_classification = False
     returns_currency = True
     returns_delivery_estimate = True
 
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
-    # Honours a client-supplied Idempotency-Key on POST /shipments/{id}/buy.
-    supports_idempotency_key = True
     capabilities = EasyPostCapabilities()
 
     def __init__(self, api_key: str, *, timeout: float = 60.0):
@@ -130,7 +126,7 @@ class EasyPostAdapter(Adapter):
 
     # ── buying ──────────────────────────────────────────────────────
 
-    def buy(self, shipment: Shipment, rate: Rate, *, idempotency_key: str | None) -> Label:
+    def buy(self, shipment: Shipment, rate: Rate) -> Label:
         raw = rate.raw if isinstance(rate.raw, dict) else {}
         shipment_id = raw.get("shipment_id") or raw.get("_container_id")
         rate_id = raw.get("id")
@@ -144,18 +140,13 @@ class EasyPostAdapter(Adapter):
         _status, body = request(
             "POST",
             f"{BASE}/shipments/{shipment_id}/buy",
-            headers=self._buy_headers(idempotency_key),
+            headers=self._headers,
             json={"rate": {"id": rate_id}},
             timeout=self.timeout,
             provider=self.name,
             retries=0,  # never blind-retry a purchase
         )
         return self._label(body)
-
-    def _buy_headers(self, idempotency_key: str | None) -> dict[str, str]:
-        if idempotency_key:
-            return {**self._headers, "Idempotency-Key": idempotency_key}
-        return dict(self._headers)
 
     def void(self, label: Label) -> bool:
         if not label.shipment_id:

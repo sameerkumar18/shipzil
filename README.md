@@ -1,6 +1,6 @@
 # shipzil
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.14-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](#license)
 [![Typed](https://img.shields.io/badge/mypy-strict-brightgreen)](#development)
 [![Ruff](https://img.shields.io/badge/lint-ruff-purple)](#development)
@@ -47,10 +47,13 @@ source:
 ```bash
 git clone git@github.com:sameerkumar18/shipzil.git
 cd shipzil
-pip install -e .
+uv sync
 ```
 
-Zero runtime dependencies. Python 3.10 or newer, standard library only.
+Zero runtime dependencies, standard library only. Tested on CPython 3.9
+through 3.14. Note that 3.9 reached end of life in October 2025 — it is
+supported because the only thing it cost was `slots=True` on the dataclasses,
+not because running it is a good idea.
 
 ## Usage
 
@@ -252,12 +255,26 @@ label out the door, it isn't in v1.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest -m "not live"    # offline, no credentials needed
-pytest -m live          # hits real sandboxes, needs .env
-ruff check shipzil tests
-mypy shipzil
+uv sync                      # dev toolchain, pinned by uv.lock
+uv run pytest -m "not live"  # offline, no credentials needed
+uv run pytest -m live        # hits real sandboxes, needs .env
+uv run ruff check shipzil tests
+uv run mypy shipzil
 ```
+
+Compatibility across the supported range:
+
+```bash
+for v in 3.9 3.10 3.11 3.12 3.13 3.14; do
+  uv run --python $v --isolated --with pytest pytest
+done
+```
+
+The dev toolchain runs on 3.10+ only, because mypy and pytest 9 both dropped
+3.9. That is why the dev group uses environment markers rather than dragging
+the library's floor up to match its tools, and why mypy is configured at 3.10
+while ruff lints at `py39` — mypy refuses to target 3.9 at all, so ruff plus a
+real 3.9 test run is what actually guards the floor.
 
 Live tests refuse to run against a production key.
 
