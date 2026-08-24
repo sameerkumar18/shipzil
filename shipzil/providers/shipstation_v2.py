@@ -115,13 +115,28 @@ class ShipStationV2Adapter(Adapter):
                 "shipment": {
                     "ship_from": _address(shipment.from_address),
                     "ship_to": _address(shipment.to_address),
-                    "packages": [_package(p) for p in shipment.parcels],
+                    "packages": [
+                        {
+                            **_package(p),
+                            **(
+                                {"products": prods}
+                                if (prods := self._products(p, shipment))
+                                else {}
+                            ),
+                        }
+                        for p in shipment.parcels
+                    ],
                     **(
                         {"advanced_options": opts}
                         if (opts := self._advanced_options(shipment, shipment.parcels[0]))
                         else {}
                     ),
                     **({"ship_date": shipment.ship_date} if shipment.ship_date else {}),
+                    **(
+                        {"customs": customs}
+                        if (customs := self._customs(shipment))
+                        else {}
+                    ),
                 },
             },
             timeout=self.timeout,
@@ -187,6 +202,62 @@ class ShipStationV2Adapter(Adapter):
                     source="shipzil",
                 )
             )
+        return out
+
+    def _customs(self, shipment: Shipment) -> dict[str, Any] | None:
+        """ShipEngine's shipment-level customs block.
+
+        `customs_items` is **deprecated** here — the spec says "Please provide
+        this information under `products` inside `packages`" — so the line detail
+        goes on each package via `_products`, and only the shipment-wide fields
+        live in this object.
+        """
+        if not self.is_cross_border(shipment):
+            return None
+        if not self.customs_lines(shipment):
+            return None
+        out: dict[str, Any] = {
+            "contents": "merchandise",
+            "non_delivery": "return_to_sender",
+        }
+        # Lowercase three-letter incoterms, from the spec's enum:
+        # exw fca cpt cip dpu dap ddp fas fob cfr cif ddu daf deq des.
+        # "delivery_duty_paid" is rejected with "Unknown TermsOfTradeCode value".
+        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
+            out["terms_of_trade_code"] = "ddp"
+        elif shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
+            out["terms_of_trade_code"] = "ddu"
+        return out
+
+    @staticmethod
+    def _products(parcel: Parcel, shipment: Shipment) -> list[dict[str, Any]]:
+        """Per-package customs lines, which is where ShipEngine wants them.
+
+        This is the one provider that keeps the parcel association, so it walks
+        the parcel's own items rather than the flattened shipment-wide list.
+        """
+        out: list[dict[str, Any]] = []
+        for item in parcel.items:
+            if item.line_value is None or item.line_weight is None:
+                continue
+            entry: dict[str, Any] = {
+                "description": item.description,
+                "quantity": item.quantity,
+                # Line totals, matching every other provider's convention.
+                "value": {
+                    "currency": (item.currency or "USD").lower(),
+                    "amount": float(item.line_value),
+                },
+                "weight": {"value": float(item.line_weight.to("oz")), "unit": "ounce"},
+                "country_of_origin": (
+                    item.origin_country or shipment.from_address.country or "US"
+                ),
+            }
+            if item.hs_code:
+                entry["harmonized_tariff_code"] = item.hs_code
+            if item.sku:
+                entry["sku"] = item.sku
+            out.append(entry)
         return out
 
     @staticmethod

@@ -208,28 +208,26 @@ class ShippoAdapter(Adapter):
         """
         if (shipment.from_address.country or "US") == (shipment.to_address.country or "US"):
             return None
-        items: list[dict[str, Any]] = []
-        for parcel in shipment.parcels:
-            for item in parcel.items:
-                if item.weight is None or item.value is None:
-                    continue
-                entry: dict[str, Any] = {
-                    "description": item.description,
-                    "quantity": item.quantity,
-                    "net_weight": str(item.weight.to("oz")),
-                    "mass_unit": "oz",
-                    "value_amount": str(item.value),
-                    "value_currency": item.currency,
-                    "origin_country": item.origin_country or shipment.from_address.country or "US",
-                }
-                if item.hs_code:
-                    entry["hs_code"] = item.hs_code
-                if item.sku:
-                    entry["sku_code"] = item.sku
-                items.append(entry)
+        items: list[dict[str, Any]] = [
+            {
+                "description": line.description,
+                "quantity": line.quantity,
+                # LINE TOTALS. Shippo documents net_weight as "quantity * weight
+                # per item" and value_amount as "quantity * value per item";
+                # per-unit figures under-declare the shipment.
+                "net_weight": str(line.line_weight.to("oz")),
+                "mass_unit": "oz",
+                "value_amount": str(line.line_value),
+                "value_currency": line.currency,
+                "origin_country": line.origin_country,
+                **({"hs_code": line.hs_code} if line.hs_code else {}),
+                **({"sku_code": line.sku} if line.sku else {}),
+            }
+            for line in self.customs_lines(shipment)
+        ]
         if not items:
             return None
-        eei = shipment.derived_eei_exemption
+        eei = self.render_eei(shipment)
         if not eei:
             # Above $2,500 this needs an AES filing and an ITN, which shipzil
             # cannot produce. Refusing beats filing a false exemption.
@@ -249,24 +247,6 @@ class ShippoAdapter(Adapter):
         elif shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
             declaration["incoterm"] = "DDU"
         return declaration
-
-    def _customs_gap(self, shipment: Shipment) -> Exclusion | None:
-        """Refuse to quote a cross-border shipment shipzil cannot declare."""
-        if (shipment.from_address.country or "US") == (shipment.to_address.country or "US"):
-            return None
-        if self._customs(shipment) is not None:
-            return None
-        return Exclusion(
-            code=ExclusionCode.ITEM_CLASSIFICATION_REQUIRED,
-            message=(
-                "this is a cross-border shipment and shippo requires a customs "
-                "declaration to buy the label. Give every Item a weight and a value, "
-                "and an hs_code where you have one. Rating would succeed without "
-                "them and the purchase would then fail. Above $2,500 declared value "
-                "you must also set Shipment(eei_exemption=...) with an AES ITN."
-            ),
-            source="shipzil",
-        )
 
     def _parse_rate(self, data: dict[str, Any], *, shipment_id: str) -> Rate:
         raw = dict(data)

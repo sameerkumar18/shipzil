@@ -48,10 +48,17 @@ class Client:
         supports multi-parcel; `Quote.strategy` says which path was taken.
         """
         quote = self._rate(shipment)
-        # Attached here rather than in each adapter so no adapter can forget it.
-        gap = self.adapter.hazmat_fidelity_gap(shipment)
-        if gap is not None:
-            quote = replace(quote, excluded=(*quote.excluded, gap))
+        # Attached here rather than in each adapter so none can forget them.
+        extra = [
+            g
+            for g in (
+                self.adapter.customs_gap(shipment),
+                self.adapter.hazmat_fidelity_gap(shipment),
+            )
+            if g is not None
+        ]
+        if extra:
+            quote = replace(quote, excluded=(*quote.excluded, *extra))
         return quote
 
     def _rate(self, shipment: Shipment) -> Quote:

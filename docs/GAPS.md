@@ -125,6 +125,13 @@ precedence.
 A merchant selling landed-cost DDP gets the wrong duty model *and* a quote missing
 `ddp_handling_fee`.
 
+**Addressed.** `Shipment.duties_paid_by` now drives the field on each provider,
+and `UNSPECIFIED` sends nothing so the account default applies rather than a
+hardcoded liability. The wider Shippo enum (`FCA`, `DAP`, `eDAP`) is still not
+exposed, and ShipEngine's three overlapping spellings are still resolved by
+picking `customs.terms_of_trade_code` alone, since no precedence is documented.
+Easyship DDP itself is unproven live — see *Still unresolved*.
+
 ---
 
 ## 3. Residential: dropped on two providers, fabricated on one
@@ -404,3 +411,17 @@ Shippo may be misclassified as fan-out only, from a single probe that returned
 zero rates alongside a *"UPS — Hard: Too Many Requests"* message. Both
 `README.md` and `docs/API-REALITY.md` assert it. Needs re-probing across carrier
 accounts.
+
+Easyship returns zero rates for DDP on the free sandbox while returning four for
+DDU on the same lane. shipzil's payload matches the published v2024-09 schema, so
+the working hypothesis is a plan gate or a courier that does not support DDP on
+this lane, not a shipzil defect. Confirming it needs one `/couriers` call to read
+`supported_incoterms`, which the spent sandbox allowance currently blocks. Until
+then, treat Easyship DDP as unproven in both directions: not shown broken, not
+shown working.
+
+Neither ShipStation adapter has ever bought an international label. v1 and v2
+customs are asserted only against the request body shipzil would send, because
+the only ShipStation credentials available are production and nothing mutating
+has been sent with them. A payload assertion catches an unwired builder or a
+misspelled field; it cannot catch a field ShipStation rejects at purchase.

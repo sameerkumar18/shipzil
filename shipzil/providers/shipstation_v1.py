@@ -226,6 +226,39 @@ class ShipStationV1Adapter(Adapter):
             strategy=Strategy.NATIVE,
         )
 
+    def _international_options(self, shipment: Shipment) -> dict[str, Any] | None:
+        """v1's `internationalOptions`, the thinnest customs surface of the five.
+
+        Its `customsItems` carry only description, quantity, value,
+        harmonizedTariffCode and countryOfOrigin. **There is no per-item weight
+        and no EEI field at all**, so a US export above the $2,500 threshold
+        cannot be declared through v1 even with an ITN in hand.
+
+        Out-of-band dependency worth knowing: ShipStation overwrites supplied
+        `customsItems` unless International Settings > Customs Declarations is
+        set to "Leave blank (Enter Manually)" in the dashboard. Nothing in the
+        API reports that setting, so shipzil cannot detect it.
+        """
+        if not self.is_cross_border(shipment):
+            return None
+        lines = self.customs_lines(shipment)
+        if not lines:
+            return None
+        return {
+            "contents": "merchandise",
+            "nonDelivery": "return_to_sender",
+            "customsItems": [
+                {
+                    "description": line.description,
+                    "quantity": line.quantity,
+                    "value": float(line.line_value),
+                    **({"harmonizedTariffCode": line.hs_code} if line.hs_code else {}),
+                    "countryOfOrigin": line.origin_country,
+                }
+                for line in lines
+            ],
+        }
+
     def _rates_for_carrier(self, carrier_code: str, shipment: Shipment) -> list[Rate]:
         parcel = shipment.parcels[0]
         to = shipment.to_address
@@ -348,6 +381,10 @@ class ShipStationV1Adapter(Adapter):
             },
             "testLabel": self.test_labels,
         }
+        intl = self._international_options(shipment)
+        if intl:
+            # v1 accepts customs only on createlabel; getrates has no such field.
+            payload["internationalOptions"] = intl
         if parcel.dimensions is not None:
             length, width, height = parcel.dimensions.to("in")
             payload["dimensions"] = {

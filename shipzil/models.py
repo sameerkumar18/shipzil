@@ -17,6 +17,7 @@ from .units import Dimensions, Weight
 __all__ = [
     "Address",
     "AddressClass",
+    "CustomsLine",
     "DangerousGoods",
     "DryIce",
     "DutiesPaidBy",
@@ -229,6 +230,24 @@ class TrackingLeg:
 
 
 @dataclass(frozen=True)
+class CustomsLine:
+    """One line of a customs declaration, with totals already computed.
+
+    Adapters receive these rather than raw `Item`s so the quantity arithmetic
+    happens once. `line_value` and `line_weight` are totals, not per unit.
+    """
+
+    description: str
+    quantity: int
+    line_value: Decimal
+    line_weight: Weight
+    currency: str = "USD"
+    hs_code: str | None = None
+    origin_country: str = "US"
+    sku: str | None = None
+
+
+@dataclass(frozen=True)
 class Address:
     """A postal address. `country` is ISO 3166-1 alpha-2."""
 
@@ -284,14 +303,33 @@ class Item:
 
     description: str
     quantity: int = 1
+    #: **Per unit**, not the line total. `Shipment.declared_value` and every
+    #: adapter multiply by `quantity`, because the providers want line totals:
+    #: Shippo's `net_weight` is documented as "quantity * weight per item" and
+    #: EasyPost's `weight` as "Total weight (unit weight * quantity)". Sending a
+    #: per-unit figure where a total is expected under-declares the customs
+    #: value, which is not a formatting mistake.
     weight: Weight | None = None
     dimensions: Dimensions | None = None
+    #: **Per unit**, not the line total. See the note on `weight`.
     value: Decimal | None = None
     currency: str = "USD"
     sku: str | None = None
     hs_code: str | None = None
     category: str | None = None
     origin_country: str | None = None
+
+    @property
+    def line_value(self) -> Decimal | None:
+        """Total declared value for this line: value x quantity."""
+        return None if self.value is None else self.value * self.quantity
+
+    @property
+    def line_weight(self) -> Weight | None:
+        """Total weight for this line: weight x quantity."""
+        if self.weight is None:
+            return None
+        return Weight(value=self.weight.value * self.quantity, unit=self.weight.unit)
 
     def __post_init__(self) -> None:
         if self.quantity < 1:
@@ -459,6 +497,7 @@ class ExclusionCode(str, Enum):
     DIMENSIONS_REQUIRED = "dimensions_required"
     ITEM_CLASSIFICATION_REQUIRED = "item_classification_required"
     ADDRESS_UNSUPPORTED = "address_unsupported"
+    CUSTOMS_DECLARATION_REQUIRED = "customs_declaration_required"
     HAZMAT_DETAIL_UNSUPPORTED = "hazmat_detail_unsupported"
     RATE_LIMITED = "rate_limited"
     UNKNOWN = "unknown"

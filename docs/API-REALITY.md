@@ -406,9 +406,26 @@ US -> CA, fully declared item
 ```
 
 A caller would see four perfectly good rates and discover the problem only when
-buying. shipzil now builds the declaration for Shippo and refuses at *rating*
-time when it cannot, because a rate that can never be bought is worse than no
-rate.
+buying. shipzil now builds the declaration on all five adapters and refuses at
+*rating* time when it cannot, because a rate that can never be bought is worse
+than no rate.
+
+#### Two of the five builders were written and never called
+
+The first pass added `_customs_info` (EasyPost) and `_international_options`
+(ShipStation v1), and wired neither into a request. Both were correct. Both were
+dead code, so EasyPost's international purchase still failed — now with a vaguer
+error than before, `400 The request could not be understood by the server due to
+malformed syntax`, because the shipment was created with no customs at all.
+
+Unit tests did not catch it, and could not have: they asserted what the builders
+*returned*, and a correct builder whose output is discarded still returns the
+right thing. The tests that catch it patch `shipzil.http.request` and assert on
+the bytes each adapter would actually send. `TestCustomsReachesTheWire` does that
+for all five providers; deleting any single call site fails a named test.
+
+The lesson generalises past customs, so there is also a test asserting that no
+private helper in the package is defined-but-never-called.
 
 ### `eel_pfc` is a filing decision, so it is derived only where that is factual
 
@@ -423,7 +440,50 @@ data. **Above the threshold it refuses**, because that case needs an AES filing
 and an ITN that shipzil cannot produce. `Shipment(eei_exemption="AES_ITN")`
 overrides either way.
 
-Verified live on a Shippo test token: `LS001790923US`, US to Toronto, DDP.
+Verified live, US to Toronto, one fully declared item, DDP:
+
+| Provider | Tracking | Note |
+|---|---|---|
+| Shippo | `LS001791022US` | test token |
+| EasyPost | `LM000024449US` | test key; rate count went 14 -> 18 once customs was attached |
+| Easyship | — | rates DDU, zero rates DDP; see below |
+| ShipStation v1 | — | no credentials; proven only at the payload layer |
+| ShipStation v2 | — | no credentials; proven only at the payload layer |
+
+The EasyPost rate count is worth keeping: attaching customs did not just make the
+purchase work, it *unlocked four services* that the same shipment could not see
+without a declaration. A missing declaration is not only a purchase-time failure,
+it is silently a worse quote.
+
+### Easyship DDP returns zero rates on the free sandbox, cause unresolved
+
+US to CA, identical parcel and item, only `duties_paid_by` differing:
+
+```
+duties_paid_by unset (DDU default)   4 rates
+duties_paid_by=SENDER  (DDP)         0 rates, HTTP 422
+  message: The request body content is not valid.
+  details: No shipping solutions available based on the information provided
+```
+
+The first read of that was "shipzil sends `incoterms` wrongly." **That was wrong,
+and worth recording as wrong.** The v2024-09 OpenAPI definition puts `incoterms`
+at the top level of `RateRequest`, typed `enum: ["DDU", "DDP", null]` — exactly
+the placement and casing shipzil sends. `calculate_tax_and_duties`, which the
+spec says "must be true when using DDP Incoterms", defaults to `true`, so
+omitting it is also correct.
+
+The `message` is a generic 422 envelope; the `details` line is the real content,
+and *"no shipping solutions available"* is a courier-selection outcome, not a
+schema complaint. The spec also documents a 402 for this exact feature: *"The DDP
+RATES feature is not available for free subscription plan"*, and couriers
+advertise per-service `supported_incoterms`.
+
+So the likely cause is that no courier connected to this sandbox offers DDP on
+this lane, or the plan gates it. **Not established**, because confirming it needs
+a `/couriers` call to read `supported_incoterms` and the sandbox allowance was
+spent probing the seven placement variants that ruled out a payload bug. No code
+was changed on the strength of a guess.
 
 ## Hazmat changes which rates come back, not just the price
 

@@ -42,6 +42,8 @@ class EasyPostCapabilities(Capabilities):
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
+    # EasyPost writes eel_pfc as "NOEEI 30.37(a)", not the enum token.
+    eei_style = "prose"
     # Unverified: EasyPost's documentation has not been consulted, so shipzil
     # claims nothing rather than guessing. Any declared hazmat detail is
     # reported as unsupported until this is checked against their spec.
@@ -83,6 +85,11 @@ class EasyPostAdapter(Adapter):
                     "from_address": _address(shipment.from_address),
                     "to_address": _address(shipment.to_address),
                     "parcel": _parcel(parcel),
+                    **(
+                        {"customs_info": ci}
+                        if (ci := self._customs_info(shipment))
+                        else {}
+                    ),
                 }
             },
             timeout=self.timeout,
@@ -113,6 +120,11 @@ class EasyPostAdapter(Adapter):
                     "from_address": _address(shipment.from_address),
                     "to_address": _address(shipment.to_address),
                     "shipments": [{"parcel": _parcel(p)} for p in shipment.parcels],
+                    **(
+                        {"customs_info": ci}
+                        if (ci := self._customs_info(shipment))
+                        else {}
+                    ),
                 }
             },
             timeout=self.timeout,
@@ -232,6 +244,45 @@ class EasyPostAdapter(Adapter):
         return refund in {"submitted", "refunded"}
 
     # ── translation ─────────────────────────────────────────────────
+
+    def _customs_info(self, shipment: Shipment) -> dict[str, Any] | None:
+        """EasyPost nests everything under `customs_info`.
+
+        Field names differ from every other provider: `hs_tariff_number` not
+        `hs_code`, `origin_country`, and `value` / `weight` are **line totals**
+        ("Total value (unit value * quantity)"). `eel_pfc` is written in prose,
+        "NOEEI 30.37(a)", where Shippo uses the token `NOEEI_30_37_a`.
+        """
+        if not self.is_cross_border(shipment):
+            return None
+        lines = self.customs_lines(shipment)
+        eel = self.render_eei(shipment)
+        if not lines or not eel:
+            return None
+        return {
+            "contents_type": "merchandise",
+            "customs_certify": True,
+            "customs_signer": (
+                shipment.from_address.name or shipment.from_address.company or ""
+            ),
+            "eel_pfc": eel,
+            # Abandonment destroys the goods, so returning is the safer default.
+            "non_delivery_option": "return",
+            "restriction_type": "none",
+            "customs_items": [
+                {
+                    "description": line.description,
+                    "quantity": line.quantity,
+                    "value": float(line.line_value),
+                    "weight": float(line.line_weight.to("oz")),
+                    "origin_country": line.origin_country,
+                    "currency": line.currency,
+                    **({"hs_tariff_number": line.hs_code} if line.hs_code else {}),
+                    **({"code": line.sku} if line.sku else {}),
+                }
+                for line in lines
+            ],
+        }
 
     def _dimension_gap(self, parcel: Parcel) -> Exclusion | None:
         """EasyPost cannot derive a box from items; say so rather than guessing."""

@@ -369,7 +369,7 @@ class TestCustomsAndItems:
         sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
         a = ShippoAdapter("shippo_test_x")
         assert a._customs(sh) is None
-        assert a._customs_gap(sh) is None
+        assert a.customs_gap(sh) is None
 
     def test_cross_border_builds_a_declaration_from_parcel_items(self) -> None:
         d = ShippoAdapter("shippo_test_x")._customs(self._intl())
@@ -384,8 +384,9 @@ class TestCustomsAndItems:
         """Rating succeeds without customs and the purchase then fails, so the
         refusal has to come at rating time."""
         bare = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX),))
-        gap = ShippoAdapter("shippo_test_x")._customs_gap(bare)
+        gap = ShippoAdapter("shippo_test_x").customs_gap(bare)
         assert gap is not None
+        assert gap.code is z.ExclusionCode.CUSTOMS_DECLARATION_REQUIRED
         assert "cross-border" in gap.message
 
     def test_eei_exemption_is_derived_only_below_the_threshold(self) -> None:
@@ -455,3 +456,270 @@ class TestFlatRateEndToEnd:
             s1.request = original  # type: ignore[assignment]
         assert captured["packageCode"] == "flat_rate_envelope"
         assert "dimensions" not in captured
+
+
+class TestCustomsAcrossAllProviders:
+    """Every adapter builds customs, in its own spelling.
+
+    Two of these were written and never wired into a request. `_customs_info`
+    and `_international_options` both existed, were correct, and were called by
+    nothing, so EasyPost's international purchase still failed with "The request
+    could not be understood by the server due to malformed syntax". There is now
+    a test asserting no private helper is orphaned.
+    """
+
+    CA = z.Address(
+        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
+        name="R", phone="4165550199", email="r@example.com", country="CA",
+    )
+
+    def _intl(self, **kw: object) -> z.Shipment:
+        item = z.Item(
+            "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="610910", origin_country="US",
+        )
+        return z.Shipment(  # type: ignore[arg-type]
+            FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(item,)),), **kw
+        )
+
+    def test_no_private_helper_is_orphaned(self) -> None:
+        """A helper nobody calls is indistinguishable from a broken feature."""
+        import ast
+        import pathlib as _p
+
+        files = list(_p.Path("shipzil").rglob("*.py"))
+        for path in files:
+            tree = ast.parse(path.read_text())
+            defined = {
+                n.name
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef)
+                and n.name.startswith("_")
+                and not n.name.startswith("__")
+            }
+            used: set[str] = set()
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Attribute):
+                    used.add(n.attr)
+                elif isinstance(n, ast.Name):
+                    used.add(n.id)
+            elsewhere = "".join(q.read_text() for q in files if q != path)
+            orphans = sorted(
+                d for d in defined - used if d not in elsewhere and d != "_unused"
+            )
+            assert not orphans, f"{path.name}: defined but never called: {orphans}"
+
+    def test_every_adapter_declares_line_totals_not_per_unit(self) -> None:
+        """quantity 2 at $15 each must declare $30, not $15."""
+        sh = self._intl()
+        ep = EasyPostAdapter("EZTKx")._customs_info(sh)
+        assert ep is not None
+        assert ep["customs_items"][0]["value"] == 30.0
+        assert ep["customs_items"][0]["weight"] == 12.0
+
+        sp = ShippoAdapter("shippo_test_x")._customs(sh)
+        assert sp is not None
+        assert sp["items"][0]["value_amount"] == "30"
+        assert sp["items"][0]["net_weight"].startswith("12")
+
+        v1 = ShipStationV1Adapter("k", "s")._international_options(sh)
+        assert v1 is not None
+        assert v1["customsItems"][0]["value"] == 30.0
+
+        prods = ShipStationV2Adapter("k")._products(sh.parcels[0], sh)
+        assert prods[0]["value"]["amount"] == 30.0
+        assert prods[0]["weight"]["value"] == 12.0
+
+    def test_provider_specific_field_names(self) -> None:
+        """The same concept, four spellings. None is portable."""
+        sh = self._intl()
+        ep = EasyPostAdapter("EZTKx")._customs_info(sh)
+        assert "hs_tariff_number" in ep["customs_items"][0]
+        assert "hs_code" in ShippoAdapter("shippo_test_x")._customs(sh)["items"][0]
+        v1 = ShipStationV1Adapter("k", "s")._international_options(sh)
+        assert "harmonizedTariffCode" in v1["customsItems"][0]
+        prods = ShipStationV2Adapter("k")._products(sh.parcels[0], sh)
+        assert "harmonized_tariff_code" in prods[0]
+
+    def test_eei_is_rendered_per_provider(self) -> None:
+        """Same regulation, two spellings. EasyPost wants prose."""
+        sh = self._intl()
+        assert EasyPostAdapter("EZTKx").render_eei(sh) == "NOEEI 30.37(a)"
+        assert ShippoAdapter("shippo_test_x").render_eei(sh) == "NOEEI_30_37_a"
+
+    def test_shipstation_v2_uses_lowercase_incoterms(self) -> None:
+        """`delivery_duty_paid` is rejected: "Unknown TermsOfTradeCode value"."""
+        a = ShipStationV2Adapter("k")
+        sender = a._customs(self._intl(duties_paid_by=z.DutiesPaidBy.SENDER))
+        recipient = a._customs(self._intl(duties_paid_by=z.DutiesPaidBy.RECIPIENT))
+        assert sender["terms_of_trade_code"] == "ddp"
+        assert recipient["terms_of_trade_code"] == "ddu"
+
+    def test_shipstation_v2_keeps_lines_on_the_package(self) -> None:
+        """It is the only provider that preserves the parcel association."""
+        sh = self._intl()
+        assert "customs_items" not in ShipStationV2Adapter("k")._customs(sh)
+        assert ShipStationV2Adapter("k")._products(sh.parcels[0], sh)
+
+    @pytest.mark.parametrize(
+        "adapter",
+        [
+            EasyPostAdapter("EZTKx"),
+            ShippoAdapter("shippo_test_x"),
+            ShipStationV1Adapter("k", "s"),
+            ShipStationV2Adapter("k"),
+            EasyshipAdapter("sand_x"),
+        ],
+    )
+    def test_domestic_never_triggers_a_customs_gap(self, adapter: object) -> None:
+        sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
+        assert adapter.customs_gap(sh) is None  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize(
+        "adapter",
+        [
+            EasyPostAdapter("EZTKx"),
+            ShippoAdapter("shippo_test_x"),
+            ShipStationV1Adapter("k", "s"),
+            ShipStationV2Adapter("k"),
+            EasyshipAdapter("sand_x"),
+        ],
+    )
+    def test_cross_border_without_items_is_refused_everywhere(self, adapter: object) -> None:
+        bare = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX),))
+        gap = adapter.customs_gap(bare)  # type: ignore[attr-defined]
+        assert gap is not None
+        assert gap.code is z.ExclusionCode.CUSTOMS_DECLARATION_REQUIRED
+
+    def test_high_value_export_is_refused_everywhere(self) -> None:
+        big = z.Item("gold bar", quantity=1, value=Decimal("5000"), weight=LB)
+        sh = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(big,)),))
+        for a in (EasyPostAdapter("EZTKx"), ShippoAdapter("shippo_test_x")):
+            gap = a.customs_gap(sh)
+            assert gap is not None and "AES" in gap.message
+
+
+class TestCustomsReachesTheWire:
+    """Assert customs appears in the outgoing request body, per provider.
+
+    The unit tests above assert what `_customs()` *returns*. They passed while
+    EasyPost's `_customs_info` was never called, because a correct builder whose
+    output is discarded is still a correct builder. These tests patch the single
+    `shipzil.http.request` choke point and inspect the bytes the adapter would
+    actually send, which is the only assertion that would have failed.
+
+    The stub answers every call with `{}`, so the adapter raises while parsing.
+    That is fine and deliberate: the payload is captured at call time, before
+    the response matters, so the flow does not need to be mocked convincingly.
+    """
+
+    CA = z.Address(
+        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
+        name="R", phone="4165550199", email="r@example.com", country="CA",
+    )
+
+    def _intl(self) -> z.Shipment:
+        item = z.Item(
+            "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="610910", origin_country="US",
+        )
+        return z.Shipment(
+            FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(item,)),),
+            duties_paid_by=z.DutiesPaidBy.SENDER,
+        )
+
+    @staticmethod
+    def _capture(module: object, call: object) -> list[object]:
+        """Run `call`, returning every JSON body the adapter tried to send."""
+        import contextlib
+
+        seen: list[object] = []
+
+        def fake(method: str, url: str, **kw: object) -> tuple[int, dict[str, object]]:
+            seen.append(kw.get("json"))
+            return 200, {}
+
+        original = module.request  # type: ignore[attr-defined]
+        module.request = fake  # type: ignore[attr-defined]
+        try:
+            with contextlib.suppress(Exception):
+                call()  # type: ignore[operator]
+        finally:
+            module.request = original  # type: ignore[attr-defined]
+        return [b for b in seen if b is not None]
+
+    def _blob(self, module: object, call: object) -> str:
+        import json
+
+        bodies = self._capture(module, call)
+        assert bodies, "adapter sent no JSON body at all"
+        return json.dumps(bodies)
+
+    def test_easypost_sends_customs_info_on_shipment_creation(self) -> None:
+        import shipzil.providers.easypost as mod
+
+        adapter = EasyPostAdapter("EZTKx")
+        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        assert "customs_info" in blob
+        assert "hs_tariff_number" in blob
+        assert "610910" in blob
+        assert "NOEEI 30.37(a)" in blob
+
+    def test_shippo_sends_customs_declaration_on_shipment_creation(self) -> None:
+        import shipzil.providers.shippo as mod
+
+        adapter = ShippoAdapter("shippo_test_x")
+        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        assert "customs_declaration" in blob
+        assert "hs_code" in blob
+        assert "NOEEI_30_37_a" in blob
+
+    def test_shipstation_v2_sends_customs_and_products_on_rating(self) -> None:
+        import shipzil.providers.shipstation_v2 as mod
+
+        adapter = ShipStationV2Adapter("k")
+        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        assert "customs" in blob
+        assert "harmonized_tariff_code" in blob
+        assert '"terms_of_trade_code": "ddp"' in blob
+
+    def test_easyship_sends_customs_bearing_items_on_rating(self) -> None:
+        import shipzil.providers.easyship as mod
+
+        adapter = EasyshipAdapter("sand_x")
+        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        assert "hs_code" in blob
+        assert "610910" in blob
+        assert "incoterms" in blob
+
+    def test_shipstation_v1_sends_international_options_on_label_creation(self) -> None:
+        """v1 is the exception: `getrates` has no customs field, `createlabel` does.
+
+        So this is the one provider whose customs cannot be proven by rating.
+        """
+        import shipzil.providers.shipstation_v1 as mod
+
+        adapter = ShipStationV1Adapter("k", "s")
+        rate = z.Rate(
+            carrier="stamps_com", service="USPS First Class International",
+            amount=Decimal("24.69"), service_code="usps_first_class_mail",
+            provider="shipstation_v1", raw={"_carrier_code": "stamps_com"},
+        )
+        blob = self._blob(mod, lambda: adapter.buy(self._intl(), rate))
+        assert "internationalOptions" in blob
+        assert "customsItems" in blob
+        assert "harmonizedTariffCode" in blob
+        assert "610910" in blob
+
+    def test_domestic_sends_no_customs_anywhere(self) -> None:
+        """A domestic shipment must not acquire a customs block."""
+        import shipzil.providers.easypost as ep_mod
+        import shipzil.providers.shippo as sp_mod
+
+        domestic = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
+        for mod, adapter in (
+            (ep_mod, EasyPostAdapter("EZTKx")),
+            (sp_mod, ShippoAdapter("shippo_test_x")),
+        ):
+            blob = self._blob(mod, lambda a=adapter: a.rate_single(domestic))
+            assert "customs" not in blob, f"{adapter.name} sent customs on a domestic label"

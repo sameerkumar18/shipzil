@@ -14,6 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from ..models import (
+    CustomsLine,
     Exclusion,
     ExclusionCode,
     Label,
@@ -23,6 +24,15 @@ from ..models import (
     Rate,
     Shipment,
 )
+
+#: EasyPost writes the same citations in prose form.
+_EEI_PROSE = {
+    "NOEEI_30_37_a": "NOEEI 30.37(a)",
+    "NOEEI_30_37_f": "NOEEI 30.37(f)",
+    "NOEEI_30_37_h": "NOEEI 30.37(h)",
+    "NOEEI_30_36": "NOEEI 30.36",
+    "AES_ITN": "AES ITN",
+}
 
 __all__ = ["Adapter", "Capabilities"]
 
@@ -81,6 +91,98 @@ class Adapter(ABC):
     #: that ships under-declared leaves the liability with the shipper while
     #: looking like a success.
     hazmat_fields: frozenset[str] = frozenset()
+
+    #: How this provider spells the EEI exemption. The same regulation is
+    #: written differently per provider: EasyPost wants "NOEEI 30.37(a)" with
+    #: spaces and parentheses, Shippo wants the enum token "NOEEI_30_37_a".
+    #: shipzil holds the token form and each adapter renders it.
+    eei_style: str = "token"
+
+    @staticmethod
+    def is_cross_border(shipment: Shipment) -> bool:
+        return (shipment.from_address.country or "US") != (
+            shipment.to_address.country or "US"
+        )
+
+    @staticmethod
+    def customs_lines(shipment: Shipment) -> list[CustomsLine]:
+        """Declarable lines, flattened across parcels in order.
+
+        Values and weights are **line totals**, because that is what every
+        provider asks for and getting it wrong under-declares the shipment:
+        Shippo documents `net_weight` as "quantity * weight per item" and
+        EasyPost documents `weight` as "Total weight (unit weight * quantity)".
+
+        Flattening loses which parcel a line belongs to. That is unavoidable for
+        Shippo and EasyPost, whose customs item lists are shipment-level with no
+        parcel reference. Adapters that can do better — ShipEngine, via
+        `packages[].products[]` — should walk `shipment.parcels` themselves
+        rather than use this.
+        """
+        lines: list[CustomsLine] = []
+        for parcel in shipment.parcels:
+            for item in parcel.items:
+                if item.line_weight is None or item.line_value is None:
+                    continue
+                lines.append(
+                    CustomsLine(
+                        description=item.description,
+                        quantity=item.quantity,
+                        line_value=item.line_value,
+                        line_weight=item.line_weight,
+                        currency=item.currency,
+                        hs_code=item.hs_code,
+                        origin_country=item.origin_country
+                        or shipment.from_address.country
+                        or "US",
+                        sku=item.sku,
+                    )
+                )
+        return lines
+
+    def render_eei(self, shipment: Shipment) -> str | None:
+        """The exemption in this provider's spelling, or None to refuse."""
+        token = shipment.derived_eei_exemption
+        if not token:
+            return None
+        if self.eei_style == "prose":
+            return _EEI_PROSE.get(token, token)
+        return token
+
+    def customs_gap(self, shipment: Shipment) -> Exclusion | None:
+        """Refuse a cross-border shipment shipzil cannot declare.
+
+        Deliberately raised at *rating* time. Providers happily rate an
+        international shipment with no customs data and then fail the purchase —
+        Shippo answered a fully rated US-to-Canada shipment with "USPS - Customs
+        declaration is required for international shipments via the USPS". A rate
+        that can never be bought is worse than no rate.
+        """
+        if not self.is_cross_border(shipment):
+            return None
+        if not self.customs_lines(shipment):
+            return Exclusion(
+                code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+                message=(
+                    f"{self.name} needs a customs declaration for a cross-border "
+                    "shipment. Give every Item a weight and a value, and an hs_code "
+                    "where you have one. Rating would succeed without them and the "
+                    "purchase would then fail."
+                ),
+                source="shipzil",
+            )
+        if self.render_eei(shipment) is None:
+            return Exclusion(
+                code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+                message=(
+                    f"declared value {shipment.declared_value} exceeds the $2,500 "
+                    "NOEEI 30.37(a) threshold, so this export needs an AES filing and "
+                    "an ITN that shipzil cannot produce. Set "
+                    "Shipment(eei_exemption=...) with your ITN or the correct citation."
+                ),
+                source="shipzil",
+            )
+        return None
 
     def hazmat_fidelity_gap(self, shipment: Shipment) -> Exclusion | None:
         """Report hazmat detail this provider will drop.
