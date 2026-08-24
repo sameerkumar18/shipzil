@@ -49,6 +49,7 @@ class ShipStationV2Capabilities(Capabilities):
 
 class ShipStationV2Adapter(Adapter):
     name = "shipstation_v2"
+    incoterm_style = "lower"
     # advanced_options.{dangerous_goods, dangerous_goods_contact, dry_ice,
     # dry_ice_weight, contains_alcohol}. The full IATA declaration exists on
     # packages[].products[].dangerous_goods[] (UN number, class, packing group,
@@ -222,11 +223,11 @@ class ShipStationV2Adapter(Adapter):
         }
         # Lowercase three-letter incoterms, from the spec's enum:
         # exw fca cpt cip dpu dap ddp fas fob cfr cif ddu daf deq des.
-        # "delivery_duty_paid" is rejected with "Unknown TermsOfTradeCode value".
-        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
-            out["terms_of_trade_code"] = "ddp"
-        elif shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
-            out["terms_of_trade_code"] = "ddu"
+        # "delivery_duty_paid" is rejected with "Unknown TermsOfTradeCode value",
+        # which is why this adapter declares incoterm_style = "lower".
+        incoterm = self.render_incoterm(shipment)
+        if incoterm:
+            out["terms_of_trade_code"] = incoterm
         return out
 
     @staticmethod

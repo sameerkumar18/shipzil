@@ -498,6 +498,7 @@ class ExclusionCode(str, Enum):
     ITEM_CLASSIFICATION_REQUIRED = "item_classification_required"
     ADDRESS_UNSUPPORTED = "address_unsupported"
     CUSTOMS_DECLARATION_REQUIRED = "customs_declaration_required"
+    DUTIES_UNSUPPORTED = "duties_unsupported"
     HAZMAT_DETAIL_UNSUPPORTED = "hazmat_detail_unsupported"
     RATE_LIMITED = "rate_limited"
     UNKNOWN = "unknown"

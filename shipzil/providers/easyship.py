@@ -33,7 +33,6 @@ from ..http import request
 from ..models import (
     Address,
     DangerousGoods,
-    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Item,
@@ -125,7 +124,7 @@ class EasyshipAdapter(Adapter):
             "parcels": [self._parcel(parcel)],
             "shipping_settings": {"units": {"weight": "kg", "dimensions": "cm"}},
         }
-        incoterms = self._incoterms(shipment)
+        incoterms = self.render_incoterm(shipment)
         if incoterms:
             payload["incoterms"] = incoterms
         residential = shipment.to_address.residential
@@ -297,7 +296,7 @@ class EasyshipAdapter(Adapter):
                 "buy_label_synchronous": True,
             },
         }
-        incoterms = self._incoterms(shipment)
+        incoterms = self.render_incoterm(shipment)
         if incoterms:
             payload["incoterms"] = incoterms
         residential = shipment.to_address.residential
@@ -482,20 +481,6 @@ class EasyshipAdapter(Adapter):
                 ),
                 source="shipzil",
             )
-        return None
-
-    @staticmethod
-    def _incoterms(shipment: Shipment) -> str | None:
-        """Map duty liability to Easyship's two-value enum.
-
-        Easyship accepts DDU, DDP or null. UNSPECIFIED sends nothing so the
-        account default applies — shipzil used to hardcode DDU, which silently
-        made the recipient liable for duty on every international shipment.
-        """
-        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
-            return "DDP"
-        if shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
-            return "DDU"
         return None
 
     def _parcel(self, parcel: Parcel) -> dict[str, Any]:

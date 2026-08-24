@@ -42,6 +42,10 @@ class EasyPostCapabilities(Capabilities):
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
+    # shipzil sends no duty-liability field here, so `duties_gap` reports it
+    # rather than letting duties_paid_by vanish. Measured: DDP and DDU
+    # produced byte-identical payloads before this was declared.
+    incoterm_style = None
     # EasyPost writes eel_pfc as "NOEEI 30.37(a)", not the enum token.
     eei_style = "prose"
     # Unverified: EasyPost's documentation has not been consulted, so shipzil

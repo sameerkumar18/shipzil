@@ -17,9 +17,23 @@ mentions EasyPost is therefore unverified for that provider.
 
 Ordered by commercial risk, not by effort.
 
+**Reading this document.** It was written as a survey of what shipzil did not
+model, and several entries have since been implemented. Rather than delete them —
+the provider research in each is still the reference for that concept — entries
+that have been addressed now say so in bold, and state what is *still* missing.
+An entry with no such note has not been touched. Sections 1 and 2 carry one.
+
 ---
 
 ## 1. Hazmat and dangerous goods — nothing modelled at all
+
+**Partly addressed.** `DangerousGoods` and `DryIce` now model the common flags,
+each adapter declares `hazmat_fields` for what it can carry, and
+`hazmat_fidelity_gap` reports declared detail a provider will drop rather than
+discarding it silently. What remains unmodelled is the fully regulated
+consignment: ShipEngine's 19-field per-product declaration below is still
+unreachable through shipzil, so `un_number`, `hazard_class` and `packing_group`
+are reported as dropped on every provider rather than sent to any of them.
 
 The largest gap, and the three aggregators disagree profoundly about *where*
 hazmat lives. Any abstraction has to reconcile shipment-level booleans against
@@ -125,12 +139,50 @@ precedence.
 A merchant selling landed-cost DDP gets the wrong duty model *and* a quote missing
 `ddp_handling_fee`.
 
-**Addressed.** `Shipment.duties_paid_by` now drives the field on each provider,
-and `UNSPECIFIED` sends nothing so the account default applies rather than a
-hardcoded liability. The wider Shippo enum (`FCA`, `DAP`, `eDAP`) is still not
-exposed, and ShipEngine's three overlapping spellings are still resolved by
-picking `customs.terms_of_trade_code` alone, since no precedence is documented.
-Easyship DDP itself is unproven live — see *Still unresolved*.
+**Addressed, on three providers of five.** `Shipment.duties_paid_by` drives the
+field through one shared mapping, `Adapter.render_incoterm`, and `UNSPECIFIED`
+sends nothing so the account default applies rather than a hardcoded liability.
+
+Measured on the wire afterwards, DDP and DDU produced **byte-identical payloads
+on EasyPost and ShipStation v1**: those two adapters had no duty field at all, so
+the caller's choice was being discarded in silence. They now declare
+`incoterm_style = None` and `duties_gap` reports it as
+`DUTIES_UNSUPPORTED` on the quote. Worded as a shipzil limitation rather than a
+provider one, because EasyPost's documentation is off-limits here and v1's
+absence rests on scraped HTML.
+
+Still missing: the wider Shippo enum (`FCA`, `DAP`, `eDAP`) is not exposed.
+ShipEngine expresses duty liability in two places and shipzil now sends **both**
+`customs.terms_of_trade_code` and `advanced_options.delivered_duty_paid`; no
+precedence is documented, so if they ever disagree the outcome is undefined.
+Easyship DDP is unproven live — see *Still unresolved*.
+
+---
+
+## 2b. Enum families still spelled per adapter
+
+Two concepts are centralised — the EEI citation via `eei_style` / `render_eei`,
+and duty liability via `incoterm_style` / `render_incoterm`. Two are not, and are
+currently hardcoded four times each:
+
+| Concept | EasyPost | Shippo | v1 | v2 |
+|---|---|---|---|---|
+| contents type | `merchandise` | `MERCHANDISE` | `merchandise` | `merchandise` |
+| non-delivery | `return` | `RETURN` | `return_to_sender` | `return_to_sender` |
+
+No bug today, because shipzil always sends the same value and each literal is
+correct for its provider. It is listed because the casing split is real — Shippo
+uppercases where EasyPost does not — and that is exactly the shape of the `eel_pfc`
+defect, where one provider wanted `NOEEI 30.37(a)` and another the token
+`NOEEI_30_37_a`.
+
+Deliberately **not** abstracted yet. Neither is a caller-facing option, so a
+renderer would have one input and no second caller — speculative generality. The
+trigger to centralise is the moment `contents_type` becomes settable (gift,
+documents, sample, returned goods, each with per-provider spellings and duty
+consequences) or `non_delivery` becomes a choice, since abandonment destroys the
+goods and return costs money. At that point it should follow `eei_style`, not
+grow a fifth hardcoded literal.
 
 ---
 

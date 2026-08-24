@@ -78,15 +78,68 @@ class TestAddressClass:
 class TestDutyLiability:
     """shipzil used to hardcode DDU, making the recipient liable, silently."""
 
-    def test_unspecified_sends_nothing(self) -> None:
+    #: Each adapter's declared spelling, and what it means on the wire. Three
+    #: providers had a near-identical if/elif of their own before this was
+    #: centralised on `Adapter.render_incoterm`.
+    STYLES = (
+        (ShippoAdapter("shippo_test_x"), "DDP", "DDU"),
+        (EasyshipAdapter("sand_x"), "DDP", "DDU"),
+        (ShipStationV2Adapter("k"), "ddp", "ddu"),
+        (EasyPostAdapter("EZTKx"), None, None),
+        (ShipStationV1Adapter("k", "s"), None, None),
+    )
+
+    def test_unspecified_sends_nothing_on_every_provider(self) -> None:
         sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
         assert sh.duties_paid_by is z.DutiesPaidBy.UNSPECIFIED
-        assert EasyshipAdapter("sand_x")._incoterms(sh) is None
+        for adapter, _ddp, _ddu in self.STYLES:
+            assert adapter.render_incoterm(sh) is None
 
-    def test_sender_is_ddp_and_recipient_is_ddu(self) -> None:
-        a = EasyshipAdapter("sand_x")
-        assert a._incoterms(_ship(z.DutiesPaidBy.SENDER)) == "DDP"
-        assert a._incoterms(_ship(z.DutiesPaidBy.RECIPIENT)) == "DDU"
+    def test_sender_is_ddp_and_recipient_is_ddu_in_each_spelling(self) -> None:
+        """One concept, three spellings, one mapping."""
+        for adapter, ddp, ddu in self.STYLES:
+            assert adapter.render_incoterm(_ship(z.DutiesPaidBy.SENDER)) == ddp
+            assert adapter.render_incoterm(_ship(z.DutiesPaidBy.RECIPIENT)) == ddu
+
+    def test_providers_that_cannot_express_duties_say_so(self) -> None:
+        """Silently dropping a commercial decision is the bug being prevented.
+
+        Measured before this existed: DDP and DDU produced byte-identical
+        payloads on EasyPost and ShipStation v1.
+        """
+        for adapter, ddp, _ddu in self.STYLES:
+            gap = adapter.duties_gap(_ship(z.DutiesPaidBy.SENDER))
+            if ddp is None:
+                assert gap is not None, f"{adapter.name} drops duties silently"
+                assert gap.code is z.ExclusionCode.DUTIES_UNSUPPORTED
+            else:
+                assert gap is None, f"{adapter.name} expresses duties, should not warn"
+
+    def test_no_duties_gap_when_the_caller_expressed_no_preference(self) -> None:
+        sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
+        for adapter, _ddp, _ddu in self.STYLES:
+            assert adapter.duties_gap(sh) is None
+
+    def test_incoterm_mapping_exists_in_exactly_one_place(self) -> None:
+        """Adapters declare a style; none of them branch on DutiesPaidBy again."""
+        import pathlib as _p
+
+        for f in sorted(_p.Path("shipzil/providers").glob("*.py")):
+            if f.name == "base.py":
+                continue
+            lines = f.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if "DutiesPaidBy." not in line or line.strip().startswith("#"):
+                    continue
+                # The one legitimate remaining site: ShipEngine expresses duty
+                # liability twice, and `advanced_options.delivered_duty_paid` is
+                # a boolean rather than an incoterm string, so it cannot come
+                # from `render_incoterm`.
+                window = "\n".join(lines[i : i + 3])
+                assert "delivered_duty_paid" in window, (
+                    f"{f.name}:{i + 1} maps DutiesPaidBy by hand; declare "
+                    f"incoterm_style and call render_incoterm instead: {line.strip()}"
+                )
 
     def test_no_incoterm_literal_is_detached_from_the_callers_choice(self) -> None:
         """An incoterm may only appear near a `duties_paid_by` decision.
@@ -723,3 +776,103 @@ class TestCustomsReachesTheWire:
         ):
             blob = self._blob(mod, lambda a=adapter: a.rate_single(domestic))
             assert "customs" not in blob, f"{adapter.name} sent customs on a domestic label"
+
+
+class TestFanOutPreservesTheShipment:
+    """Fan-out must not quietly change the shipment it is splitting.
+
+    `_single_parcel_shipment` named four of `Shipment`'s seven fields, so
+    `duties_paid_by`, `eei_exemption` and `ship_date` were dropped on the path
+    that four of six provider surfaces take for every multi-parcel shipment. The
+    customs work in this module was all verified on single-parcel shipments, so
+    none of it noticed.
+    """
+
+    FROM = FROM
+    CA = z.Address(
+        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
+        name="R", phone="4165550199", email="r@example.com", country="CA",
+    )
+
+    @staticmethod
+    def _parcel(value: str) -> z.Parcel:
+        return z.Parcel(
+            weight=LB, dimensions=BOX,
+            items=(
+                z.Item(
+                    "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
+                    value=Decimal(value), hs_code="610910", origin_country="US",
+                ),
+            ),
+        )
+
+    def test_fan_out_preserves_every_shipment_field(self) -> None:
+        """Field-driven, so a new `Shipment` field cannot reintroduce the bug."""
+        import dataclasses
+
+        shipment = z.Shipment(
+            self.FROM, self.CA, (self._parcel("15"), self._parcel("15")),
+            duties_paid_by=z.DutiesPaidBy.SENDER,
+            eei_exemption="AES_ITN",
+            reference="order-1",
+        )
+        leg = ShippoAdapter("shippo_test_x")._single_parcel_shipment(
+            shipment, shipment.parcels[0]
+        )
+        for field in dataclasses.fields(z.Shipment):
+            if field.name == "parcels":
+                continue
+            assert getattr(leg, field.name) == getattr(shipment, field.name), (
+                f"fan-out dropped {field.name!r}"
+            )
+        assert len(leg.parcels) == 1
+
+    def test_ddp_survives_fan_out_on_the_wire(self) -> None:
+        """A two-parcel DDP shipment reached Shippo with `incoterm` unset."""
+        import shipzil.providers.shippo as mod
+
+        client = z.Client(ShippoAdapter("shippo_test_x"))
+        shipment = z.Shipment(
+            self.FROM, self.CA, (self._parcel("15"), self._parcel("15")),
+            duties_paid_by=z.DutiesPaidBy.SENDER,
+        )
+        bodies = TestCustomsReachesTheWire._capture(
+            mod, lambda: client.get_rates(shipment)
+        )
+        assert len(bodies) == 2, "expected one request per parcel"
+        for body in bodies:
+            assert isinstance(body, dict)
+            declaration = body.get("customs_declaration")
+            assert declaration is not None, "fan-out leg sent no customs declaration"
+            assert declaration["incoterm"] == "DDP", "DDP was downgraded by fan-out"
+
+    def test_explicit_eei_override_survives_fan_out(self) -> None:
+        """Losing the override made each leg send no declaration at all.
+
+        `customs_gap` runs against the original shipment, which still had the
+        override, so rating passed while the legs on the wire carried nothing.
+        """
+        import shipzil.providers.shippo as mod
+
+        client = z.Client(ShippoAdapter("shippo_test_x"))
+        shipment = z.Shipment(
+            self.FROM, self.CA, (self._parcel("4000"), self._parcel("4000")),
+            eei_exemption="AES_ITN",
+        )
+        bodies = TestCustomsReachesTheWire._capture(
+            mod, lambda: client.get_rates(shipment)
+        )
+        assert len(bodies) == 2
+        for body in bodies:
+            assert isinstance(body, dict)
+            declaration = body.get("customs_declaration")
+            assert declaration is not None, "above-threshold leg sent no declaration"
+            assert declaration["eel_pfc"] == "AES_ITN"
+
+    def test_single_parcel_shipment_is_not_hand_written(self) -> None:
+        """The bug was a hand-copied constructor; `replace` cannot drift."""
+        import inspect
+
+        source = inspect.getsource(ShippoAdapter._single_parcel_shipment)
+        assert "replace(" in source
+        assert "from_address=shipment.from_address" not in source

@@ -12,9 +12,11 @@ honest about what it cannot do. Two rules matter:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 
 from ..models import (
     CustomsLine,
+    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Label,
@@ -98,6 +100,16 @@ class Adapter(ABC):
     #: shipzil holds the token form and each adapter renders it.
     eei_style: str = "token"
 
+    #: How this provider spells DDP/DDU, or None when shipzil does not express
+    #: duty liability here at all. Same reasoning as `eei_style`: one concept,
+    #: several spellings, so the mapping lives once and adapters declare a style.
+    #: `"upper"` -> `DDP` / `DDU` (Shippo, Easyship).
+    #: `"lower"` -> `ddp` / `ddu` (ShipEngine's `terms_of_trade_code` enum, which
+    #: rejects `delivery_duty_paid` with "Unknown TermsOfTradeCode value").
+    #: `None` -> the caller's `duties_paid_by` cannot be honoured, and
+    #: `duties_gap` reports that rather than dropping it silently.
+    incoterm_style: str | None = "upper"
+
     @staticmethod
     def is_cross_border(shipment: Shipment) -> bool:
         return (shipment.from_address.country or "US") != (
@@ -148,6 +160,54 @@ class Adapter(ABC):
         if self.eei_style == "prose":
             return _EEI_PROSE.get(token, token)
         return token
+
+    def render_incoterm(self, shipment: Shipment) -> str | None:
+        """DDP/DDU in this provider's spelling, or None to send nothing.
+
+        None covers two different situations on purpose: the caller expressed no
+        preference, and the provider has no field for it. Callers who need to tell
+        those apart should read `duties_gap`, which fires only for the second.
+        """
+        if self.incoterm_style is None:
+            return None
+        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
+            return "DDP" if self.incoterm_style == "upper" else "ddp"
+        if shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
+            return "DDU" if self.incoterm_style == "upper" else "ddu"
+        # UNSPECIFIED sends nothing, so the account default applies. shipzil used
+        # to hardcode DDU here, silently making the recipient liable for duty.
+        return None
+
+    def duties_gap(self, shipment: Shipment) -> Exclusion | None:
+        """Report a duty-liability choice this provider will not carry.
+
+        Same shape as `hazmat_fidelity_gap`, and for the same reason: the caller
+        made a commercial decision and shipzil is about to discard it. Measured
+        on the wire, DDP and DDU produced byte-identical payloads on EasyPost and
+        ShipStation v1, so `duties_paid_by` was doing nothing on two of five
+        providers with no indication to the caller.
+
+        Deliberately worded as a shipzil limitation, not a provider one. EasyPost
+        may well support duty billing; its documentation is off-limits here, so
+        the honest claim is that *shipzil* does not express it, not that EasyPost
+        cannot. ShipStation v1's `internationalOptions` shows no such field in the
+        scraped HTML, which is absence of evidence rather than proof of absence.
+        """
+        if shipment.duties_paid_by is DutiesPaidBy.UNSPECIFIED:
+            return None
+        if self.incoterm_style is not None:
+            return None
+        return Exclusion(
+            code=ExclusionCode.DUTIES_UNSUPPORTED,
+            message=(
+                f"shipzil does not express duty liability on {self.name}, so "
+                f"duties_paid_by={shipment.duties_paid_by.name} will not reach the "
+                "carrier and the account default applies. If that default is DDU "
+                "the recipient is billed import duty on arrival. Use a provider "
+                "where shipzil expresses it, or set the default on your account."
+            ),
+            source="shipzil",
+        )
 
     def customs_gap(self, shipment: Shipment) -> Exclusion | None:
         """Refuse a cross-border shipment shipzil cannot declare.
@@ -242,10 +302,24 @@ class Adapter(ABC):
         raise NotImplementedError(f"{self.name} does not support voiding via shipzil yet")
 
     def _single_parcel_shipment(self, shipment: Shipment, parcel: Parcel) -> Shipment:
-        """A copy of `shipment` carrying exactly one parcel, for fan-out."""
-        return Shipment(
-            from_address=shipment.from_address,
-            to_address=shipment.to_address,
-            parcels=(parcel,),
-            reference=shipment.reference,
-        )
+        """A copy of `shipment` carrying exactly one parcel, for fan-out.
+
+        Uses `replace` rather than naming fields, because the hand-written version
+        silently dropped every field added to `Shipment` after it. It listed four
+        of seven, so `duties_paid_by`, `eei_exemption` and `ship_date` all vanished
+        on the fan-out path — which is the path four of six provider surfaces take
+        for any multi-parcel shipment.
+
+        The consequences were not cosmetic. A two-parcel DDP shipment reached
+        Shippo with `incoterm` unset, silently reverting duty liability to the
+        recipient. A declared value above the EEI threshold with an explicit
+        `eei_exemption="AES_ITN"` lost the override, so each leg built no customs
+        declaration at all while `customs_gap` still passed on the original
+        shipment: rating succeeded and the purchase would have failed at the
+        carrier, the precise failure this library exists to prevent.
+
+        `replace` cannot drift. A new field is carried without anyone remembering
+        to add it here, and `test_fan_out_preserves_every_shipment_field` fails if
+        this is ever written out by hand again.
+        """
+        return replace(shipment, parcels=(parcel,))

@@ -26,7 +26,6 @@ from ..errors import LabelPurchaseError, ShipzilError
 from ..http import request
 from ..models import (
     Address,
-    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Label,
@@ -242,10 +241,9 @@ class ShippoAdapter(Adapter):
             "certify_signer": shipment.from_address.name or shipment.from_address.company or "",
             "items": items,
         }
-        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
-            declaration["incoterm"] = "DDP"
-        elif shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
-            declaration["incoterm"] = "DDU"
+        incoterm = self.render_incoterm(shipment)
+        if incoterm:
+            declaration["incoterm"] = incoterm
         return declaration
 
     def _parse_rate(self, data: dict[str, Any], *, shipment_id: str) -> Rate:

@@ -53,6 +53,7 @@ class Client:
             g
             for g in (
                 self.adapter.customs_gap(shipment),
+                self.adapter.duties_gap(shipment),
                 self.adapter.hazmat_fidelity_gap(shipment),
             )
             if g is not None

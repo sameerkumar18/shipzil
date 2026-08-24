@@ -62,6 +62,10 @@ class ShipStationV1Capabilities(Capabilities):
 
 class ShipStationV1Adapter(Adapter):
     name = "shipstation_v1"
+    # shipzil sends no duty-liability field here, so `duties_gap` reports it
+    # rather than letting duties_paid_by vanish. Measured: DDP and DDU
+    # produced byte-identical payloads before this was declared.
+    incoterm_style = None
     # No hazmat fields found anywhere in the v1 documentation.
     hazmat_fields = frozenset()
     capabilities = ShipStationV1Capabilities()

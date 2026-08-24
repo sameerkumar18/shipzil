@@ -485,6 +485,91 @@ a `/couriers` call to read `supported_incoterms` and the sandbox allowance was
 spent probing the seven placement variants that ruled out a payload bug. No code
 was changed on the strength of a guess.
 
+## Fan-out was quietly rewriting the shipment
+
+Everything above about customs was verified on single-parcel shipments. Four of
+six provider surfaces cannot rate multiple parcels natively, so shipzil fans out —
+and `_single_parcel_shipment` was building each leg by naming fields:
+
+```python
+return Shipment(
+    from_address=shipment.from_address,
+    to_address=shipment.to_address,
+    parcels=(parcel,),
+    reference=shipment.reference,
+)
+```
+
+Four of `Shipment`'s seven fields. `duties_paid_by`, `eei_exemption` and
+`ship_date` were dropped on every multi-parcel shipment. Measured on the wire, one
+parcel against two, identical in every other respect:
+
+```
+1 parcel,  DDP requested   customs_declaration.incoterm = "DDP"
+2 parcels, DDP requested   customs_declaration.incoterm = None   (both legs)
+```
+
+So a two-parcel DDP shipment silently reverted duty liability to the recipient.
+
+The second case is worse. With a declared value above the EEI threshold and an
+explicit `eei_exemption="AES_ITN"`, the override is lost on each leg, so
+`render_eei` returns None and the adapter declines to build a declaration at all —
+while `customs_gap` still passes, because the client checks the gap against the
+*original* shipment, which still has the override:
+
+```
+2 parcels, $8,000 declared, eei_exemption="AES_ITN"
+  gap check      passes (no CUSTOMS_DECLARATION_REQUIRED)
+  leg 1 payload  customs_declaration present = False
+  leg 2 payload  customs_declaration present = False
+```
+
+Rating succeeds, nothing is declared, the purchase fails at the carrier. That is
+precisely the failure mode the customs work was written to eliminate, reachable
+by adding a second parcel.
+
+The fix is `replace(shipment, parcels=(parcel,))`, which cannot drift as
+`Shipment` grows. The regression test is field-driven — it walks
+`dataclasses.fields(Shipment)` and asserts every field except `parcels` survives —
+so adding a field cannot reintroduce this, and a fifth test asserts the method is
+not written out by hand again.
+
+The general lesson is narrower than "use replace": **a hand-copied constructor is
+a silent truncation waiting for the next field.** The customs builders failed by
+never being called; this failed by being called with a quietly diminished
+argument. Both are invisible to a test that checks return values.
+
+## One concept, several spellings: what is centralised and what is not
+
+Four enum families cross all five providers. Two are now mapped in one place:
+
+| Concept | Mechanism | Spellings reconciled |
+|---|---|---|
+| EEI citation | `eei_style` + `render_eei` | `NOEEI 30.37(a)` vs `NOEEI_30_37_a` |
+| duty liability | `incoterm_style` + `render_incoterm` | `DDP` vs `ddp` vs *absent* |
+| contents type | hardcoded per adapter | `merchandise` vs `MERCHANDISE` |
+| non-delivery | hardcoded per adapter | `return` vs `RETURN` vs `return_to_sender` |
+
+Duty liability was three near-identical `if/elif DutiesPaidBy` blocks in three
+adapters, each with its own casing, plus two adapters with no block at all. The
+two with none were not visibly different from the three with one, which is how
+they went unnoticed: measured on the wire, **DDP and DDU produced byte-identical
+payloads on EasyPost and ShipStation v1.** The caller's commercial decision was
+being dropped without a word.
+
+Those two now declare `incoterm_style = None`, and `duties_gap` returns
+`DUTIES_UNSUPPORTED` on the quote — the same treatment `hazmat_fidelity_gap`
+already gave to dropped hazmat detail. A test asserts no adapter outside
+`base.py` branches on `DutiesPaidBy` again, with one allowed exception:
+ShipEngine's `advanced_options.delivered_duty_paid` is a boolean rather than an
+incoterm string, so it cannot come from the shared renderer. shipzil sends both
+that and `customs.terms_of_trade_code`; the spec documents no precedence between
+them.
+
+The bottom two rows are deliberately left duplicated. Neither is caller-settable,
+so a renderer would have a single input and no second caller. `docs/GAPS.md`
+section 2b records the trigger for centralising them.
+
 ## Hazmat changes which rates come back, not just the price
 
 Measured on Shippo with a test token, identical parcel, the only difference being
