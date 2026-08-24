@@ -13,3 +13,9 @@ build/
 
 # Built docs site. `mkdocs build` output, never committed.
 site/
+
+# Local build playbook — tricks, scrape recipes, credential inventory, open
+# operational state. Deliberately never pushed. Must not move into docs/, since
+# MkDocs builds everything under there.
+NOTES.local.md
+*.local.md

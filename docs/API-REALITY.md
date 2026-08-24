@@ -1,12 +1,19 @@
 # API reality — verified, not assumed
 
-Live probes, 2026-08-23. Every claim was produced by an actual call. Raw
-responses in `.probe/` (gitignored). Re-run `scripts/probe_capabilities.py`
-before trusting this again — it is only as good as its date.
+Live probes, most recently 2026-08-24. Every claim marked as measured was
+produced by an actual call, with the raw responses kept in `.probe/` (gitignored).
+**This document is only as good as its date** — provider behaviour changes, and
+several claims here were wrong for months before anyone checked.
 
-ShipStation calls were **read-only** (carrier listings, rate quotes). The only
-ShipStation credentials available are production, so nothing mutating was ever
-sent. Easyship was researched from docs only — no key yet.
+There is no probe script. The probes were run by hand, one question at a time,
+which is deliberate: two of the five providers meter or charge for the calls, so
+a "re-run everything" script would be a way to burn a sandbox allowance without
+learning anything. To re-verify a specific claim, reproduce the call it cites.
+
+ShipStation calls were **read-only** (carrier listings, rate quotes), because the
+only ShipStation credentials that have ever been available were production, so
+nothing mutating was ever sent — and none are available now. Easyship has a
+sandbox key, though its allowance is finite and currently spent.
 
 ## The headline
 
