@@ -62,6 +62,9 @@ class ShipStationV1Capabilities(Capabilities):
 
 class ShipStationV1Adapter(Adapter):
     name = "shipstation_v1"
+    # "The value (in USD) of the line item" — CustomsItem model. Note USD only:
+    # v1 has no currency field, so a non-USD Item is mis-declared, not converted.
+    customs_value_basis = "line_total"
     # shipzil sends no duty-liability field here, so `duties_gap` reports it
     # rather than letting duties_paid_by vanish. Measured: DDP and DDU
     # produced byte-identical payloads before this was declared.

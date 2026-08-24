@@ -66,6 +66,9 @@ class EasyshipCapabilities(Capabilities):
 
 class EasyshipAdapter(Adapter):
     name = "easyship"
+    # "Please note that this value refers to the unit rather than the total"
+    # — ParcelItemCreate.declared_customs_value. Already what this adapter sent.
+    customs_value_basis = "per_unit"
     # Per item: contains_battery_pi966 / pi967 / contains_liquids. Easyship is
     # the only provider that distinguishes the two IATA packing instructions.
     hazmat_fields = frozenset({"lithium_batteries", "contains_liquids"})

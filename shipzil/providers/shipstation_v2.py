@@ -50,6 +50,8 @@ class ShipStationV2Capabilities(Capabilities):
 class ShipStationV2Adapter(Adapter):
     name = "shipstation_v2"
     incoterm_style = "lower"
+    # "The declared value of *each* item" — ShipStation International Shipments.
+    customs_value_basis = "per_unit"
     # advanced_options.{dangerous_goods, dangerous_goods_contact, dry_ice,
     # dry_ice_weight, contains_alcohol}. The full IATA declaration exists on
     # packages[].products[].dangerous_goods[] (UN number, class, packing group,
@@ -239,17 +241,24 @@ class ShipStationV2Adapter(Adapter):
         """
         out: list[dict[str, Any]] = []
         for item in parcel.items:
-            if item.line_value is None or item.line_weight is None:
+            if item.value is None or item.weight is None:
                 continue
             entry: dict[str, Any] = {
                 "description": item.description,
                 "quantity": item.quantity,
-                # Line totals, matching every other provider's convention.
+                # PER UNIT, not the line total. ShipStation's International
+                # Shipments guide defines products[].value as "The declared value
+                # of *each* item", with the emphasis theirs, and their own help
+                # centre describes the UI equivalent as "Item Value (each)" with
+                # "Total Value AUTO-CALCULATED ... as Quantity x Item Value".
+                # shipzil sent line totals here until that was checked, which
+                # multiplied the declared value by the quantity and would have
+                # inflated duty on every multi-quantity line.
                 "value": {
                     "currency": (item.currency or "USD").lower(),
-                    "amount": float(item.line_value),
+                    "amount": float(item.value),
                 },
-                "weight": {"value": float(item.line_weight.to("oz")), "unit": "ounce"},
+                "weight": {"value": float(item.weight.to("oz")), "unit": "ounce"},
                 "country_of_origin": (
                     item.origin_country or shipment.from_address.country or "US"
                 ),

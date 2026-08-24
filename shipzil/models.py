@@ -231,16 +231,35 @@ class TrackingLeg:
 
 @dataclass(frozen=True)
 class CustomsLine:
-    """One line of a customs declaration, with totals already computed.
+    """One line of a customs declaration, carrying **both** bases.
 
-    Adapters receive these rather than raw `Item`s so the quantity arithmetic
-    happens once. `line_value` and `line_weight` are totals, not per unit.
+    Providers disagree about whether a customs line's value and weight mean the
+    per-unit figure or the line total, and the disagreement is not guessable —
+    it splits two against two among the four providers whose documentation says
+    either way. So this holds both and each adapter takes the one its provider
+    documents, declared as `Adapter.customs_value_basis`.
+
+    | Provider | Basis | Documented as |
+    |---|---|---|
+    | Shippo | line total | "Total value of this item, i.e. quantity * value per item" |
+    | ShipStation v1 | line total | "The value (in USD) of the line item" |
+    | ShipEngine / v2 | **per unit** | "The declared value of *each* item" |
+    | Easyship | **per unit** | "this value refers to the unit rather than the total" |
+
+    Getting it backwards is not a formatting error. Sending a line total where a
+    unit is expected multiplies the declared customs value by the quantity, which
+    inflates duty and misstates the shipment to the destination authority.
     """
 
     description: str
     quantity: int
+    #: Total for the line: unit value x quantity.
     line_value: Decimal
+    #: Total for the line: unit weight x quantity.
     line_weight: Weight
+    #: The per-unit figures, for providers documented as wanting them.
+    unit_value: Decimal
+    unit_weight: Weight
     currency: str = "USD"
     hs_code: str | None = None
     origin_country: str = "US"
@@ -303,12 +322,12 @@ class Item:
 
     description: str
     quantity: int = 1
-    #: **Per unit**, not the line total. `Shipment.declared_value` and every
-    #: adapter multiply by `quantity`, because the providers want line totals:
-    #: Shippo's `net_weight` is documented as "quantity * weight per item" and
-    #: EasyPost's `weight` as "Total weight (unit weight * quantity)". Sending a
-    #: per-unit figure where a total is expected under-declares the customs
-    #: value, which is not a formatting mistake.
+    #: **Per unit**, not the line total. Whether a provider wants this figure or
+    #: `line_weight` is provider-specific and documented per adapter as
+    #: `customs_value_basis`; see `CustomsLine`. Shippo is explicit that its
+    #: `net_weight` is "quantity * weight per item", ShipEngine is equally
+    #: explicit that its `products[].value` is "the declared value of *each*
+    #: item", and those are opposites.
     weight: Weight | None = None
     dimensions: Dimensions | None = None
     #: **Per unit**, not the line total. See the note on `weight`.

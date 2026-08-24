@@ -42,6 +42,12 @@ class EasyPostCapabilities(Capabilities):
 
 class EasyPostAdapter(Adapter):
     name = "easypost"
+    # UNVERIFIED. shipzil sends line totals here, and that is a carried-over
+    # default rather than a sourced decision: docs.easypost.com has not been
+    # read, and the local scrape under .apidocs/easypost is six copies of a 404
+    # page. A live purchase succeeded with line totals, which proves only that
+    # the request was accepted, not that the declared value was right.
+    customs_value_basis = "unverified"
     # shipzil sends no duty-liability field here, so `duties_gap` reports it
     # rather than letting duties_paid_by vanish. Measured: DDP and DDU
     # produced byte-identical payloads before this was declared.
@@ -252,10 +258,18 @@ class EasyPostAdapter(Adapter):
     def _customs_info(self, shipment: Shipment) -> dict[str, Any] | None:
         """EasyPost nests everything under `customs_info`.
 
-        Field names differ from every other provider: `hs_tariff_number` not
-        `hs_code`, `origin_country`, and `value` / `weight` are **line totals**
-        ("Total value (unit value * quantity)"). `eel_pfc` is written in prose,
-        "NOEEI 30.37(a)", where Shippo uses the token `NOEEI_30_37_a`.
+        Field names differ from the others: `hs_tariff_number` rather than
+        `hs_code`, and `origin_country`.
+
+        **The value/weight basis here is unverified.** This sends line totals,
+        which was never sourced — see `customs_value_basis` above. Two of the
+        four providers that do document it want per-unit figures, so this has a
+        real chance of being wrong, and being wrong means the declared customs
+        value is multiplied by the quantity.
+
+        `eel_pfc` is written in prose, "NOEEI 30.37(a)", where Shippo uses the
+        token `NOEEI_30_37_a`. That one *is* verified: the prose form was in the
+        request body of a successful live international purchase.
         """
         if not self.is_cross_border(shipment):
             return None

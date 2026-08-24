@@ -52,6 +52,8 @@ class ShippoCapabilities(Capabilities):
 
 class ShippoAdapter(Adapter):
     name = "shippo"
+    # "Total value of this item, i.e. quantity * value per item" — CustomsItem.
+    customs_value_basis = "line_total"
     # extra.dangerous_goods{contains, lithium_batteries, biological_material},
     # extra.dry_ice{contains_dry_ice, weight}, extra.alcohol{contains_alcohol,
     # recipient_type}. No UN number, class or packing group anywhere.

@@ -26,6 +26,7 @@ from ..models import (
     Rate,
     Shipment,
 )
+from ..units import Weight
 
 #: EasyPost writes the same citations in prose form.
 _EEI_PROSE = {
@@ -104,11 +105,21 @@ class Adapter(ABC):
     #: duty liability here at all. Same reasoning as `eei_style`: one concept,
     #: several spellings, so the mapping lives once and adapters declare a style.
     #: `"upper"` -> `DDP` / `DDU` (Shippo, Easyship).
-    #: `"lower"` -> `ddp` / `ddu` (ShipEngine's `terms_of_trade_code` enum, which
-    #: rejects `delivery_duty_paid` with "Unknown TermsOfTradeCode value").
+    #: `"lower"` -> `ddp` / `ddu`. ShipEngine's `terms_of_trade_code` enum is
+    #: documented lowercase (`exw fca cpt cip dpu dap ddp fas fob cfr cif ddu
+    #: daf deq des`), so lowercase is what shipzil sends. Note their own example
+    #: request uses `"DDP"`, so the field may well be case-insensitive; shipzil
+    #: has no ShipStation credentials and has never tested that.
     #: `None` -> the caller's `duties_paid_by` cannot be honoured, and
     #: `duties_gap` reports that rather than dropping it silently.
     incoterm_style: str | None = "upper"
+
+    #: Whether this provider's customs lines mean the per-unit figure or the
+    #: line total. Not guessable and not uniform: it splits two against two
+    #: among the providers that document it. `"unverified"` means shipzil has no
+    #: authoritative source and the current choice is a carried-over default,
+    #: not a decision — see docs/GAPS.md.
+    customs_value_basis: str = "line_total"
 
     @staticmethod
     def is_cross_border(shipment: Shipment) -> bool:
@@ -120,10 +131,13 @@ class Adapter(ABC):
     def customs_lines(shipment: Shipment) -> list[CustomsLine]:
         """Declarable lines, flattened across parcels in order.
 
-        Values and weights are **line totals**, because that is what every
-        provider asks for and getting it wrong under-declares the shipment:
-        Shippo documents `net_weight` as "quantity * weight per item" and
-        EasyPost documents `weight` as "Total weight (unit weight * quantity)".
+        Each line carries **both** the per-unit and the line-total figures,
+        because providers disagree about which one a customs line means and the
+        disagreement is real rather than incidental. Shippo documents
+        `net_weight` as "quantity * weight per item"; ShipEngine documents
+        `products[].value` as "The declared value of *each* item"; Easyship says
+        outright "this value refers to the unit rather than the total". An
+        adapter must take the figure matching its own `customs_value_basis`.
 
         Flattening loses which parcel a line belongs to. That is unavoidable for
         Shippo and EasyPost, whose customs item lists are shipment-level with no
@@ -134,14 +148,22 @@ class Adapter(ABC):
         lines: list[CustomsLine] = []
         for parcel in shipment.parcels:
             for item in parcel.items:
-                if item.line_weight is None or item.line_value is None:
+                # Narrowed on the per-unit fields, since the line totals are
+                # derived from them: if either unit figure is missing the line
+                # cannot be declared on any provider, whichever basis it uses.
+                if item.weight is None or item.value is None:
                     continue
                 lines.append(
                     CustomsLine(
                         description=item.description,
                         quantity=item.quantity,
-                        line_value=item.line_value,
-                        line_weight=item.line_weight,
+                        line_value=item.value * item.quantity,
+                        line_weight=Weight(
+                            value=item.weight.value * item.quantity,
+                            unit=item.weight.unit,
+                        ),
+                        unit_value=item.value,
+                        unit_weight=item.weight,
                         currency=item.currency,
                         hs_code=item.hs_code,
                         origin_country=item.origin_country

@@ -485,6 +485,120 @@ a `/couriers` call to read `supported_incoterms` and the sandbox allowance was
 spent probing the seven placement variants that ruled out a payload bug. No code
 was changed on the strength of a guess.
 
+## Every customs claim, re-checked against the provider's own schema
+
+The customs work above was written from memory and from what the sandboxes
+accepted. This section is the result of going back to the specifications. Two
+claims in the code turned out to be **invented**, and one of them was hiding a
+real defect.
+
+### Where each provider's material actually comes from
+
+| Provider | Source used | Status |
+|---|---|---|
+| Shippo | `public-api.yaml`, 936 KB OpenAPI 3.1, vendored | authoritative |
+| ShipEngine / ShipStation v2 | `shipengine-openapi` repo + live `docs.shipstation.com` | vendored copy is **stale** |
+| ShipStation v1 | `shipstation.com/docs/api/models/*` | authoritative, read live |
+| Easyship | `developers.easyship.com` inline OpenAPI, vendored | authoritative |
+| EasyPost | **nothing** | see below |
+
+The vendored ShipEngine spec is behind the live docs: its `package_contents`
+enum has six values where the live guide documents eight, adding
+`e_commerce_goods` and `commercial_sale_of_goods_b2b`. shipzil sends
+`merchandise`, valid in both, so nothing was wrong — but a vendored spec that is
+silently a version behind is not a substitute for the live docs.
+
+**The EasyPost scrape is empty.** `.apidocs/easypost/` holds six `.md` files
+named `customs-infos.md`, `customs-items.md`, `shipments.md` and so on. All six
+are byte-identical — the same 39,193-byte `404 - EasyPost` HTML page, MD5
+`a0f08e70…`. Zero occurrences of `hs_tariff_number`, `eel_pfc` or `customs_info`
+across all of them. The scrape reported success and captured nothing, and the
+plausible filenames made it look like evidence. That is the same failure shape as
+the customs builders that were written and never called: an artefact that passes
+a glance and contains nothing.
+
+### The customs value basis is not uniform, and shipzil assumed it was
+
+The single most consequential finding. Every adapter was sending **line totals**,
+on the strength of a comment claiming providers want them. Two of the four
+providers that document it want the opposite:
+
+| Provider | Basis | Documented as |
+|---|---|---|
+| Shippo | line total | *"Total value of this item, i.e. quantity \* value per item"* |
+| ShipStation v1 | line total | *"The value (in USD) of the line item"* |
+| ShipEngine / v2 | **per unit** | *"The declared value of \*each\* item"* (emphasis theirs) |
+| Easyship | **per unit** | *"Please note that this value refers to the unit rather than the total"* |
+| EasyPost | unknown | no source |
+
+So ShipStation v2 was over-declaring by a factor of the quantity: two shirts at
+$15 were declared at $30 each, $60 for the line. That inflates duty and misstates
+the shipment to the destination authority. Easyship was already correct, by luck
+rather than design — it builds its own item dicts and never adopted the shared
+line-total helper.
+
+Corroborated twice for v2, because one ambiguous sentence is not enough: the API
+guide's *each*, and ShipStation's own help centre describing the same field in the
+UI as **"Item Value (each) — the declared value per unit"** with **"Total Value
+AUTO-CALCULATED … as Quantity × Item Value"**.
+
+`CustomsLine` now carries both figures and every adapter declares a
+`customs_value_basis`, so the choice is visible per provider instead of implied
+by which helper someone reached for.
+
+### Two citations in the code were fabricated
+
+Both were specific, quoted, attributed to a provider, and used to justify a
+decision. Neither can be sourced.
+
+**1. EasyPost, quoted as documenting `"Total value (unit value * quantity)"`** in
+three places. There is no such reading: the docs were never consulted and the
+local scrape is 404s. This was the justification for line totals on EasyPost, and
+it is now marked `customs_value_basis = "unverified"` — because the honest
+position is not that line totals are wrong, but that nobody checked. Note the
+live purchase succeeding is *no* evidence: a wrong declared value is accepted just
+as readily as a right one.
+
+**2. ShipStation v2, quoted as rejecting `delivery_duty_paid` with `"Unknown
+TermsOfTradeCode value"`** in two places. shipzil has no ShipStation credentials
+of any kind, so that error was never seen. `grep -ri termsoftrade .probe/` returns
+nothing; the only ShipStation v2 error ever recorded is *"carrier 30718 does not
+support multipackage"*. The **conclusion** was right for an unrelated reason —
+the documented enum really is lowercase (`exw fca cpt cip dpu dap ddp fas fob cfr
+cif ddu daf deq des`) — but the evidence was invented. Worth noting their own
+example request sends `"DDP"` uppercase, so the field may be case-insensitive and
+shipzil has never tested it.
+
+The pattern in both: a real decision, dressed in a quotation that made it look
+measured. A comment saying "assumed, unverified" would have been worth more,
+because it would have flagged itself for exactly this pass.
+
+### What checked out, verbatim
+
+- Shippo `contents_type` **is** uppercase: `DOCUMENTS GIFT SAMPLE MERCHANDISE
+  HUMANITARIAN_DONATION RETURN_MERCHANDISE OTHER`. `non_delivery_option` is
+  `ABANDON | RETURN`. Both differ in case from every other provider, which is why
+  the per-provider literals in section 2b of `GAPS.md` are not an accident.
+- Shippo `eel_pfc` enum is exactly the five tokens shipzil maps:
+  `NOEEI_30_37_a NOEEI_30_37_h NOEEI_30_37_f NOEEI_30_36 AES_ITN`.
+- Shippo `incoterm` is `DDP DDU FCA DAP eDAP` — note `eDAP` is mixed case.
+- ShipStation v1 `internationalOptions.customsItems` has exactly five fields:
+  `customsItemId description quantity value harmonizedTariffCode
+  countryOfOrigin`. **No weight and no EEI field**, as the adapter's docstring
+  claimed. The dashboard caveat was also accurate, verbatim: supplied
+  `customsItems` are overwritten unless *International Settings > Customs
+  Declarations* is set to "Leave blank (Enter Manually)".
+- ShipStation v1 `nonDelivery` defaults to `return_to_sender` on the
+  `Shipments/CreateLabel` endpoint, which is the endpoint shipzil uses, so the
+  explicit value matches the default rather than fighting it.
+- ShipEngine `customs_items` really is deprecated in favour of
+  `packages[].products[]`, as of **31 July 2023**, and the two are mutually
+  exclusive: *"you cannot use both … Your request can only contain one of them."*
+  shipzil sends only `products`.
+- EasyPost's prose `eel_pfc` — `"NOEEI 30.37(a)"` rather than the token — is
+  verified, not by documentation but by a successful live international purchase
+  carrying it in the request body.
+
 ## Fan-out was quietly rewriting the shipment
 
 Everything above about customs was verified on single-parcel shipments. Four of

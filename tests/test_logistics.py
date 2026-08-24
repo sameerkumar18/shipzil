@@ -562,13 +562,23 @@ class TestCustomsAcrossAllProviders:
             )
             assert not orphans, f"{path.name}: defined but never called: {orphans}"
 
-    def test_every_adapter_declares_line_totals_not_per_unit(self) -> None:
-        """quantity 2 at $15 each must declare $30, not $15."""
+    def test_each_provider_uses_the_basis_its_own_docs_specify(self) -> None:
+        """The basis is not uniform, and assuming it was is how this broke.
+
+        quantity 2, $15 and 6 oz each, so line totals are $30 / 12 oz. Which of
+        those a provider wants is documented per provider, and it splits 2-2:
+
+          Shippo     line total  "Total value of this item, i.e. quantity *
+                                  value per item"
+          v1         line total  "The value (in USD) of the line item"
+          v2         PER UNIT    "The declared value of *each* item"
+          Easyship   PER UNIT    "this value refers to the unit rather than
+                                  the total"
+
+        shipzil sent line totals everywhere until these were read, so v2 and
+        Easyship were over-declaring by a factor of the quantity.
+        """
         sh = self._intl()
-        ep = EasyPostAdapter("EZTKx")._customs_info(sh)
-        assert ep is not None
-        assert ep["customs_items"][0]["value"] == 30.0
-        assert ep["customs_items"][0]["weight"] == 12.0
 
         sp = ShippoAdapter("shippo_test_x")._customs(sh)
         assert sp is not None
@@ -580,8 +590,41 @@ class TestCustomsAcrossAllProviders:
         assert v1["customsItems"][0]["value"] == 30.0
 
         prods = ShipStationV2Adapter("k")._products(sh.parcels[0], sh)
-        assert prods[0]["value"]["amount"] == 30.0
-        assert prods[0]["weight"]["value"] == 12.0
+        assert prods[0]["value"]["amount"] == 15.0, "v2 wants per-unit value"
+        assert prods[0]["weight"]["value"] == 6.0, "v2 wants per-unit weight"
+        assert prods[0]["quantity"] == 2
+
+    def test_easyship_sends_per_unit_value(self) -> None:
+        """"this value refers to the unit rather than the total"."""
+        sh = self._intl()
+        parcel = EasyshipAdapter("sand_x")._parcel(sh.parcels[0])
+        item = parcel["items"][0]
+        assert item["declared_customs_value"] == 15.0
+        assert item["quantity"] == 2
+
+    def test_every_adapter_declares_which_basis_it_uses(self) -> None:
+        """An undeclared basis is an unexamined one; EasyPost's is unverified."""
+        expected = {
+            "shippo": "line_total",
+            "shipstation_v1": "line_total",
+            "shipstation_v2": "per_unit",
+            "easyship": "per_unit",
+            "easypost": "unverified",
+        }
+        for adapter in (
+            ShippoAdapter("shippo_test_x"),
+            ShipStationV1Adapter("k", "s"),
+            ShipStationV2Adapter("k"),
+            EasyshipAdapter("sand_x"),
+            EasyPostAdapter("EZTKx"),
+        ):
+            assert adapter.customs_value_basis == expected[adapter.name]
+
+    def test_customs_lines_carry_both_bases(self) -> None:
+        line = EasyPostAdapter("EZTKx").customs_lines(self._intl())[0]
+        assert (line.unit_value, line.line_value) == (Decimal("15"), Decimal("30"))
+        assert float(line.unit_weight.to("oz")) == 6.0
+        assert float(line.line_weight.to("oz")) == 12.0
 
     def test_provider_specific_field_names(self) -> None:
         """The same concept, four spellings. None is portable."""

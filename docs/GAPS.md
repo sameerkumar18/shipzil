@@ -11,9 +11,17 @@ rather than their prose documentation. Specs were scraped into `.apidocs/`
 | Easyship | `developers.easyship.com/llms.txt` → 213 reference pages with inline OpenAPI |
 | ShipStation v1 | `shipstation.com/docs/api/*` HTML |
 
-EasyPost is **absent on purpose**: its repositories are off-limits, and I have not
-been given the go-ahead to read `docs.easypost.com` either. Every gap below that
-mentions EasyPost is therefore unverified for that provider.
+EasyPost is **absent, and the reason is worse than "on purpose"**. Its
+repositories are off-limits, and no go-ahead was given for `docs.easypost.com`
+either — but on top of that, the scrape that *was* attempted silently failed.
+`.apidocs/easypost/` contains six plausibly-named `.md` files that are all the
+same 39,193-byte 404 page (MD5 `a0f08e70…`), with zero occurrences of
+`hs_tariff_number`, `eel_pfc` or `customs_info`. So the directory looks like
+evidence and is not.
+
+Every gap below that mentions EasyPost is unverified for that provider, and so is
+**`EasyPostAdapter.customs_value_basis`**, which is why it reads `"unverified"`
+rather than naming a basis.
 
 Ordered by commercial risk, not by effort.
 
@@ -183,6 +191,61 @@ documents, sample, returned goods, each with per-provider spellings and duty
 consequences) or `non_delivery` becomes a choice, since abandonment destroys the
 goods and return costs money. At that point it should follow `eei_style`, not
 grow a fifth hardcoded literal.
+
+---
+
+## 2c. Customs fields the specs document and shipzil does not send
+
+Found by reading the schemas rather than by hitting an error, so none of these
+has ever produced a failure — they are simply unreachable through shipzil.
+
+**ShipStation v2 / ShipEngine**
+
+- `advanced_options.canada_delivered_duty: "sender_prepay"` — the actual
+  mechanism for prepaid DDP on US→Canada USPS, a flat $9.95 surfaced in
+  `other_amount`. shipzil sends `terms_of_trade_code` and
+  `delivered_duty_paid` but not this, so the one lane most likely to be used for
+  DDP is the one where shipzil expresses it least directly. Worth noting the
+  library's own test lane is US→Toronto by USPS.
+- `tax_identifiers[]` — `vat eori ssn ein tin ioss pan voec pccc oss passport
+  abn ukims`. Not modelled at all. IOSS and EORI are effectively mandatory for
+  commercial EU traffic, so this is the largest of these.
+- `products[].vat_rate`, `mid_code`, `product_url`, `sku_description`, and
+  per-product `dangerous_goods[]` — the last being the fully regulated hazmat
+  declaration that section 1 says is unreachable.
+- `customs.declaration`, `invoice_additional_details`, `importer_of_record`,
+  `license_number`, `certificate_number`.
+- `products[].sku` is marked required in the guide's table while the prose says
+  "required only by some carriers". shipzil sends it only when the caller
+  supplied one, which follows the prose.
+
+**Shippo**
+
+- `tariff_number` as distinct from `hs_code`, with documented precedence: *"If
+  `tariff_number` is not provided, `hs_code` will be used."* shipzil only sends
+  `hs_code`, so the fallback path is the only one exercised.
+- `eccn_ear99` — *"Export Control Classification Number, required on some
+  exports from the United States."*
+- `CustomsDeclarationB13AFilingOption` — Canadian export declaration.
+- `CustomsExporterIdentification`, `CustomsTaxIdentification`,
+  `CustomsInvoicedCharges`.
+- The wider `incoterm` values `FCA`, `DAP`, `eDAP`.
+
+**ShipStation v1**
+
+- `value` is documented *"(in USD)"* and there is no currency field. A caller
+  shipping with `Item(currency="EUR")` has the number passed through as if it
+  were dollars — mis-declared, not converted. shipzil does not currently refuse
+  or warn on this, and should.
+
+**Regulatory, not a field gap**
+
+- USPS requires a six-digit HS code on **all** international commercial
+  shipments for **each item** as of **1 September 2025**, aligning with UPU
+  rules. shipzil treats `hs_code` as optional and will happily build a
+  declaration without one, which is now a purchase-time failure waiting to
+  happen on the single most common carrier. `customs_gap` should probably refuse
+  a USPS international shipment with any line missing an `hs_code`.
 
 ---
 
