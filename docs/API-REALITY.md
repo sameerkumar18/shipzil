@@ -365,6 +365,66 @@ An unadorned `urllib` request gets Cloudflare error 1010 ("banned based on your
 browser's signature"), which looks exactly like an auth failure. shipzil sets a
 `User-Agent`, so this only bites when probing by hand.
 
+## Customs items belong to the parcel, and the specs agree
+
+| Provider | Where items live | Shape |
+|---|---|---|
+| Easyship | `parcels[].items[]` | per parcel |
+| ShipEngine | `packages[].products[]` | per package |
+| ShipEngine | `customs.customs_items[]` | **deprecated** |
+| Shippo | `customs_declaration.items[]` | flat, shipment level, no parcel reference |
+
+ShipEngine's deprecation note is explicit: *"Customs declarations for each item
+in the shipment. (Please provide this information under `products` inside
+`packages`)"*. So two of the three modern shapes are per parcel, and the one that
+is not is the deprecated one.
+
+That settles the modelling question. `Parcel.items` is lossless in the direction
+that matters: a flat shipment-level list can always be produced by concatenating
+per-parcel items, but per-parcel items cannot be recovered from a flat list
+without inventing which box each line is in. The alternative encoding — a
+shipment-level item list where each item names a parcel index — carries the same
+information and adds a way to produce a dangling index, so nesting wins.
+
+Shippo's `CustomsItem` fields, read from the spec: `description`, `quantity`,
+`net_weight` + `mass_unit`, `value_amount` + `value_currency`, `origin_country`,
+`hs_code`, `sku_code`, `tariff_number`, `eccn_ear99`, `metadata`.
+
+### International purchase was broken on four of five providers
+
+Only the Easyship adapter ever sent items. The other four collected
+`Item.hs_code`, `origin_country` and `value` and discarded them, so no customs
+declaration was built at all.
+
+That failed in the worst possible way — rating succeeded and purchase did not:
+
+```
+US -> CA, fully declared item
+  rating   4 rates  (USPS Priority Express Intl, Priority Intl, First Class Intl, DHL)
+  purchase LabelPurchaseError: USPS - Customs declaration is required for
+           international shipments via the USPS
+```
+
+A caller would see four perfectly good rates and discover the problem only when
+buying. shipzil now builds the declaration for Shippo and refuses at *rating*
+time when it cannot, because a rate that can never be bought is worse than no
+rate.
+
+### `eel_pfc` is a filing decision, so it is derived only where that is factual
+
+The first declaration attempt failed with `customs_declaration.eel_pfc must not
+be empty`. That field is the EEI exemption or citation, and choosing one is a
+regulatory filing, not a formatting detail.
+
+`NOEEI_30_37_a` is the Foreign Trade Regulations exemption for shipments valued
+at $2,500 or less per Schedule B number. shipzil already knows the declared
+value, so applying it below the threshold is a derivation from the caller's own
+data. **Above the threshold it refuses**, because that case needs an AES filing
+and an ITN that shipzil cannot produce. `Shipment(eei_exemption="AES_ITN")`
+overrides either way.
+
+Verified live on a Shippo test token: `LS001790923US`, US to Toronto, DDP.
+
 ## Hazmat changes which rates come back, not just the price
 
 Measured on Shippo with a test token, identical parcel, the only difference being

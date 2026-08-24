@@ -372,6 +372,38 @@ class Shipment:
     duties_paid_by: DutiesPaidBy = DutiesPaidBy.UNSPECIFIED
     #: Future-date the label. Manifests are keyed to ship date on ShipEngine.
     ship_date: str | None = None
+    #: EEI / PFC exemption or citation for a US export, e.g. "NOEEI_30_37_a"
+    #: or "AES_ITN". Left None, shipzil derives the under-$2,500 exemption from
+    #: the declared value, and refuses rather than guessing above it — see
+    #: `derived_eei_exemption`.
+    eei_exemption: str | None = None
+
+    @property
+    def declared_value(self) -> Decimal:
+        """Total customs value across every item in every parcel."""
+        return sum(
+            ((i.value or Decimal(0)) * i.quantity for p in self.parcels for i in p.items),
+            Decimal(0),
+        )
+
+    @property
+    def derived_eei_exemption(self) -> str | None:
+        """The exemption shipzil is willing to assert, or None.
+
+        `NOEEI_30_37_a` is the Foreign Trade Regulations exemption for shipments
+        valued at $2,500 or less per Schedule B number. shipzil already knows the
+        declared value, so applying it below the threshold is a derivation from
+        the caller's own data rather than an invention.
+
+        Above the threshold it returns None: that case genuinely needs an AES
+        filing and an ITN, which shipzil cannot produce. An explicit
+        `eei_exemption` always wins.
+        """
+        if self.eei_exemption:
+            return self.eei_exemption
+        if not self.parcels or not any(p.items for p in self.parcels):
+            return None
+        return "NOEEI_30_37_a" if self.declared_value <= Decimal(2500) else None
 
     @property
     def dangerous_goods(self) -> tuple[DangerousGoods, ...]:

@@ -221,6 +221,39 @@ one total.
 Full inventory of what is still missing, taken from the providers' OpenAPI specs:
 [docs/GAPS.md](docs/GAPS.md).
 
+## International and customs
+
+Items belong to the parcel that contains them, not to the shipment:
+
+```python
+parcel = shipzil.Parcel(
+    weight=shipzil.Weight.of(16, "oz"),
+    dimensions=shipzil.Dimensions.of(10, 8, 4, "in"),
+    items=(
+        shipzil.Item("cotton t-shirt", quantity=2, weight=shipzil.Weight.of(6, "oz"),
+                     value=15, hs_code="610910", origin_country="US"),
+    ),
+)
+shipment = shipzil.Shipment(frm, toronto, (parcel,),
+                            duties_paid_by=shipzil.DutiesPaidBy.SENDER)
+```
+
+That nesting matches where the providers put it. Easyship uses
+`parcels[].items[]`, ShipEngine uses `packages[].products[]` and has
+**deprecated** its shipment-level `customs_items` in favour of it. Shippo's list
+is flat, so shipzil concatenates — which works in that direction only, since a
+flat list cannot be split back into boxes without inventing the assignment.
+
+The EEI exemption is derived, not guessed. Below $2,500 declared value shipzil
+asserts `NOEEI_30_37_a`, which follows from the value the caller already gave it.
+Above that it refuses, because an AES filing and an ITN are needed and shipzil
+cannot produce them — set `Shipment(eei_exemption="AES_ITN")` yourself.
+
+Cross-border shipments where shipzil cannot build a declaration are refused at
+**rating** time, not at purchase. Before this, Shippo returned four healthy
+international rates and then failed the buy with *"Customs declaration is
+required for international shipments via the USPS"*.
+
 ## Why not just use the provider's own SDK?
 
 Use it, if you are certain you will only ever have one provider. The official
@@ -277,7 +310,7 @@ Shipped:
   no currency rather than assuming one
 - Honest idempotency: EasyPost enforces a key, and the three providers that
   publish no such header refuse one instead of silently discarding it
-- 98 tests, including parser tests against captured real payloads
+- 110 tests, including parser tests against captured real payloads
 
 Next, roughly in order:
 

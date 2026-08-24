@@ -337,3 +337,70 @@ Things an abstraction must not flatten:
 - Easyship `shipments_update` **silently nulls** fields outside the resulting
   `coc_type` group, with no error.
 - DIM rounds up; cubic rounds down.
+
+
+---
+
+## Verification status of this document, and of the code
+
+Written after an independent review specifically looking for claims made without
+a real check. Three classes are distinguished, because collapsing them is how the
+hallucinated endpoints got in.
+
+### Measured against a live API
+
+- Hazmat changes rate eligibility: Shippo 11 rates to 3, A/B tested.
+- Residential surcharge: exactly $6.15 on Easyship, A/B tested across
+  commercial / residential / unknown.
+- Flat-rate templates: Shippo `USPS_FlatRateEnvelope` 2 rates at $9.62,
+  `USPS_SmallFlatRateBox` 1 rate at $10.59; ShipStation v1
+  `packageCode: flat_rate_envelope` 2 rates at $9.62.
+- International purchase with a customs declaration: Shippo test token,
+  `LS001790923US`, US to Toronto, DDP.
+- Easyship DDP incoterm, item hazmat flags, `set_as_residential`, surcharge
+  parsing, tracking legs.
+
+### Read from a provider's OpenAPI specification but never sent
+
+Correct as far as the schema goes, unexercised as behaviour:
+
+- ShipEngine `advanced_options` hazmat, `dangerous_goods_contact`,
+  `dry_ice_weight`, `delivered_duty_paid`, `package_code`, `insured_value`,
+  `address_residential_indicator: "unknown"`. Blocked: production keys only.
+- Shippo `extra.dry_ice`, `extra.alcohol`, `extra.insurance`, `is_residential`,
+  `street3`. Wired and unit-tested, not A/B tested live.
+- EasyPost `street3`. Nothing else changed there.
+- ShipStation v1 `street3`, `residential`.
+
+### Taken from secondary research and never verified first-hand
+
+Cited here because they motivated design decisions, and flagged because a
+downstream reader would otherwise take them as measured:
+
+- **UPS US residential surcharge $6.60 per package.** From a UPS rate-change
+  page via a research pass, not read directly. The $6.15 figure in this document
+  *is* measured, on Easyship; the $6.60 is not. `models.py` repeats the $6.60 in
+  a docstring and should be read with that caveat.
+- **Every USPS DIM and nonstandard-fee number in section 5** — divisor 139,
+  effective 12 July 2026, the 1 cubic foot threshold, zones 1 to 9, the $4.50 /
+  $10.00 / $21.00 nonstandard fees, the $3.00 dimension noncompliance fee, cubic
+  rounding direction. Sourced to USPS pages through a research pass. Not one of
+  them is exercised by shipzil, because dimensional weight is not modelled at
+  all, so nothing in the code depends on them being right. Verify before acting.
+- **USPS hazmat handling fee, 12 July 2026.** Same provenance.
+- **"ShipStation v1 has no hazmat fields."** This is absence of evidence from six
+  scraped HTML pages, not proof of absence. `hazmat_fields = frozenset()` is the
+  safe reading either way, since under-claiming only produces a warning.
+
+### Deliberately not claimed
+
+`EasyPostAdapter.hazmat_fields` is empty and its purchase-path notes cite only
+recorded traffic, because neither its repositories nor `docs.easypost.com` have
+been consulted. That is a permissions boundary, not a statement about EasyPost.
+
+### Still unresolved
+
+Shippo may be misclassified as fan-out only, from a single probe that returned
+zero rates alongside a *"UPS — Hard: Too Many Requests"* message. Both
+`README.md` and `docs/API-REALITY.md` assert it. Needs re-probing across carrier
+accounts.

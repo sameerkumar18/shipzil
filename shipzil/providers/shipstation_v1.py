@@ -149,13 +149,15 @@ class ShipStationV1Adapter(Adapter):
 
     def rate_single(self, shipment: Shipment) -> Quote:
         parcel = shipment.parcels[0]
-        if parcel.dimensions is None:
+        if not parcel.has_dimensions:
+            # See the Shippo note: a packageCode supplies the dimensions.
             return Quote(
                 excluded=(
                     Exclusion(
                         code=ExclusionCode.DIMENSIONS_REQUIRED,
                         message=(
-                            "shipstation v1 needs parcel dimensions; it cannot derive a box "
+                            "shipstation v1 needs parcel dimensions, or a packageCode via "
+                            "Parcel(packaging=PackagingTemplate(...)); it cannot derive a box "
                             "from items"
                         ),
                         source="shipzil",
@@ -227,9 +229,8 @@ class ShipStationV1Adapter(Adapter):
     def _rates_for_carrier(self, carrier_code: str, shipment: Shipment) -> list[Rate]:
         parcel = shipment.parcels[0]
         to = shipment.to_address
-        assert parcel.dimensions is not None  # guarded by rate_single
-        length, width, height = parcel.dimensions.to("in")
-
+        # Not asserted non-None: a packaging template satisfies rate_single's
+        # size check without supplying dimensions, so this must handle both.
         payload: dict[str, Any] = {
             "carrierCode": carrier_code,
             "serviceCode": None,
@@ -244,14 +245,16 @@ class ShipStationV1Adapter(Adapter):
                 "value": float(parcel.weight.to("oz")) if parcel.weight else 0.0,
                 "units": "ounces",
             },
-            "dimensions": {
+            "confirmation": self.confirmation,
+        }
+        if parcel.dimensions is not None:
+            length, width, height = parcel.dimensions.to("in")
+            payload["dimensions"] = {
                 "units": "inches",
                 "length": float(length),
                 "width": float(width),
                 "height": float(height),
-            },
-            "confirmation": self.confirmation,
-        }
+            }
         # Only send `residential` when it is actually known. bool(None) is
         # False, which asserts "commercial" and understates the quote.
         if to.residential is not None:
@@ -259,6 +262,7 @@ class ShipStationV1Adapter(Adapter):
         if parcel.packaging is not None:
             # v1 calls this packageCode, and it replaces dimensions.
             payload["packageCode"] = parcel.packaging.code
+            # A packageCode supplies the size; sending both is contradictory.
             payload.pop("dimensions", None)
 
         _status, body = request(

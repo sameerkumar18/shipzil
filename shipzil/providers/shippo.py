@@ -26,6 +26,7 @@ from ..errors import LabelPurchaseError, ShipzilError
 from ..http import request
 from ..models import (
     Address,
+    DutiesPaidBy,
     Exclusion,
     ExclusionCode,
     Label,
@@ -94,6 +95,11 @@ class ShippoAdapter(Adapter):
                 # Synchronous by explicit request; Shippo defaults to async.
                 "async": False,
                 **({"extra": extra} if (extra := self._extra(shipment, parcel)) else {}),
+                **(
+                    {"customs_declaration": customs}
+                    if (customs := self._customs(shipment))
+                    else {}
+                ),
             },
             timeout=self.timeout,
             provider=self.name,
@@ -184,6 +190,83 @@ class ShippoAdapter(Adapter):
                 "currency": "USD",
             }
         return extra
+
+    def _customs(self, shipment: Shipment) -> dict[str, Any] | None:
+        """Build `customs_declaration` for a cross-border shipment.
+
+        Not optional. Shippo rates an international shipment happily without
+        one and then **refuses the purchase**: "USPS - Customs declaration is
+        required for international shipments via the USPS". So omitting this
+        produced rates that could never be bought.
+
+        Shippo's `CustomsItem` list is flat and shipment-level, with no parcel
+        reference, so every parcel's items are concatenated. That is lossy in
+        principle — the customs form cannot say which box a line is in — but it
+        is the only shape Shippo accepts, and flattening per-parcel items into a
+        flat list is the safe direction. The reverse would require inventing a
+        parcel assignment.
+        """
+        if (shipment.from_address.country or "US") == (shipment.to_address.country or "US"):
+            return None
+        items: list[dict[str, Any]] = []
+        for parcel in shipment.parcels:
+            for item in parcel.items:
+                if item.weight is None or item.value is None:
+                    continue
+                entry: dict[str, Any] = {
+                    "description": item.description,
+                    "quantity": item.quantity,
+                    "net_weight": str(item.weight.to("oz")),
+                    "mass_unit": "oz",
+                    "value_amount": str(item.value),
+                    "value_currency": item.currency,
+                    "origin_country": item.origin_country or shipment.from_address.country or "US",
+                }
+                if item.hs_code:
+                    entry["hs_code"] = item.hs_code
+                if item.sku:
+                    entry["sku_code"] = item.sku
+                items.append(entry)
+        if not items:
+            return None
+        eei = shipment.derived_eei_exemption
+        if not eei:
+            # Above $2,500 this needs an AES filing and an ITN, which shipzil
+            # cannot produce. Refusing beats filing a false exemption.
+            return None
+        declaration: dict[str, Any] = {
+            "eel_pfc": eei,
+            "contents_type": "MERCHANDISE",
+            # ABANDON vs RETURN is a real cost decision; RETURN is the
+            # conservative default because abandonment destroys the goods.
+            "non_delivery_option": "RETURN",
+            "certify": True,
+            "certify_signer": shipment.from_address.name or shipment.from_address.company or "",
+            "items": items,
+        }
+        if shipment.duties_paid_by is DutiesPaidBy.SENDER:
+            declaration["incoterm"] = "DDP"
+        elif shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
+            declaration["incoterm"] = "DDU"
+        return declaration
+
+    def _customs_gap(self, shipment: Shipment) -> Exclusion | None:
+        """Refuse to quote a cross-border shipment shipzil cannot declare."""
+        if (shipment.from_address.country or "US") == (shipment.to_address.country or "US"):
+            return None
+        if self._customs(shipment) is not None:
+            return None
+        return Exclusion(
+            code=ExclusionCode.ITEM_CLASSIFICATION_REQUIRED,
+            message=(
+                "this is a cross-border shipment and shippo requires a customs "
+                "declaration to buy the label. Give every Item a weight and a value, "
+                "and an hs_code where you have one. Rating would succeed without "
+                "them and the purchase would then fail. Above $2,500 declared value "
+                "you must also set Shipment(eei_exemption=...) with an AES ITN."
+            ),
+            source="shipzil",
+        )
 
     def _parse_rate(self, data: dict[str, Any], *, shipment_id: str) -> Rate:
         raw = dict(data)
@@ -355,10 +438,17 @@ def _dimension_gap(parcel: Parcel) -> Exclusion | None:
             ),
             source="shipzil",
         )
-    if parcel.dimensions is None:
+    if not parcel.has_dimensions:
+        # has_dimensions, not `dimensions is None`: a carrier template supplies
+        # the size, and Shippo's schema requires the dimension fields to be
+        # ABSENT alongside one. Checking `dimensions` directly refused every
+        # flat-rate parcel before the request was even built.
         return Exclusion(
             code=ExclusionCode.DIMENSIONS_REQUIRED,
-            message="shippo requires parcel dimensions as well as a weight",
+            message=(
+                "shippo requires parcel dimensions as well as a weight, or a carrier "
+                "template via Parcel(packaging=PackagingTemplate(...))"
+            ),
             source="shipzil",
         )
     return None

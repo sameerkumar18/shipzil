@@ -88,17 +88,28 @@ class TestDutyLiability:
         assert a._incoterms(_ship(z.DutiesPaidBy.SENDER)) == "DDP"
         assert a._incoterms(_ship(z.DutiesPaidBy.RECIPIENT)) == "DDU"
 
-    def test_no_adapter_hardcodes_an_incoterm(self) -> None:
+    def test_no_incoterm_literal_is_detached_from_the_callers_choice(self) -> None:
+        """An incoterm may only appear near a `duties_paid_by` decision.
+
+        The original bug was `"incoterms": "DDU"` sitting in a payload literal,
+        which silently made the recipient liable on every international
+        shipment. This asserts every DDP/DDU literal is within a few lines of
+        the branch that reads the caller's choice, so a detached one fails.
+        """
         import pathlib
 
         for f in pathlib.Path("shipzil/providers").glob("*.py"):
-            src = f.read_text()
-            for line in src.splitlines():
-                if '"DDU"' in line or '"DDP"' in line:
-                    # Only permitted inside the mapping function or a comment.
-                    assert (
-                        "return" in line or line.strip().startswith("#") or "*" in line
-                    ), f"{f.name}: hardcoded incoterm: {line.strip()}"
+            lines = f.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if '"DDU"' not in line and '"DDP"' not in line:
+                    continue
+                if line.strip().startswith("#") or line.strip().startswith("*"):
+                    continue
+                window = "\n".join(lines[max(0, i - 6) : i + 2])
+                assert "duties_paid_by" in window, (
+                    f"{f.name}:{i + 1} incoterm literal not driven by "
+                    f"duties_paid_by: {line.strip()}"
+                )
 
 
 class TestHazmat:
@@ -305,3 +316,142 @@ class TestTrackingLegs:
         assert lbl.tracking_number == legs[0].tracking_number
         assert len(lbl.tracking_legs) == 2
         assert lbl.tracking_legs[1].handler == "aramex"
+
+
+class TestCustomsAndItems:
+    """Items live under the Parcel, and that is the correct foundation.
+
+    Verified from the specs, not assumed:
+
+    * Easyship  `parcels[].items[]`                       — per parcel
+    * ShipEngine `packages[].products[]`                  — per package, and the
+      shipment-level `customs_items` is marked **deprecated**: "Please provide
+      this information under `products` inside `packages`"
+    * Shippo    `customs_declaration.items[]`             — flat, shipment level,
+      with no parcel reference at all
+
+    Two of three modern shapes are per parcel, and the one that is not is the
+    deprecated one. Nesting items under Parcel is therefore lossless in the
+    direction that matters: a flat list can always be produced from per-parcel
+    items, but per-parcel items cannot be recovered from a flat list without
+    inventing an assignment.
+    """
+
+    CA = z.Address(
+        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
+        name="R", phone="4165550199", email="r@example.com", country="CA",
+    )
+
+    def _intl(self, **kw: object) -> z.Shipment:
+        item = z.Item(
+            "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="610910", origin_country="US",
+        )
+        parcel = z.Parcel(weight=LB, dimensions=BOX, items=(item,))
+        return z.Shipment(FROM, self.CA, (parcel,), **kw)  # type: ignore[arg-type]
+
+    def test_items_are_nested_under_the_parcel(self) -> None:
+        import dataclasses as dc
+
+        assert "items" in {f.name for f in dc.fields(z.Parcel)}
+        assert "items" not in {f.name for f in dc.fields(z.Shipment)}
+
+    def test_declared_value_sums_quantity_across_parcels(self) -> None:
+        a = z.Item("a", quantity=2, value=Decimal("15"))
+        b = z.Item("b", quantity=1, value=Decimal("40"))
+        sh = z.Shipment(
+            FROM, self.CA,
+            (z.Parcel(weight=LB, items=(a,)), z.Parcel(weight=LB, items=(b,))),
+        )
+        assert sh.declared_value == Decimal("70")
+
+    def test_domestic_needs_no_customs(self) -> None:
+        sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
+        a = ShippoAdapter("shippo_test_x")
+        assert a._customs(sh) is None
+        assert a._customs_gap(sh) is None
+
+    def test_cross_border_builds_a_declaration_from_parcel_items(self) -> None:
+        d = ShippoAdapter("shippo_test_x")._customs(self._intl())
+        assert d is not None
+        assert d["items"][0]["hs_code"] == "610910"
+        assert d["items"][0]["quantity"] == 2
+        assert d["items"][0]["origin_country"] == "US"
+        assert d["non_delivery_option"] == "RETURN", "abandonment destroys the goods"
+        assert d["certify"] is True
+
+    def test_cross_border_without_declarable_items_is_refused(self) -> None:
+        """Rating succeeds without customs and the purchase then fails, so the
+        refusal has to come at rating time."""
+        bare = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX),))
+        gap = ShippoAdapter("shippo_test_x")._customs_gap(bare)
+        assert gap is not None
+        assert "cross-border" in gap.message
+
+    def test_eei_exemption_is_derived_only_below_the_threshold(self) -> None:
+        """NOEEI 30.37(a) covers shipments of $2,500 or less per Schedule B."""
+        assert self._intl().derived_eei_exemption == "NOEEI_30_37_a"
+        big = z.Item("gold bar", quantity=1, value=Decimal("5000"), weight=LB)
+        high = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(big,)),))
+        # Above the threshold this needs an AES filing and an ITN.
+        assert high.derived_eei_exemption is None
+
+    def test_an_explicit_exemption_always_wins(self) -> None:
+        big = z.Item("gold bar", quantity=1, value=Decimal("5000"), weight=LB)
+        sh = z.Shipment(
+            FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(big,)),),
+            eei_exemption="AES_ITN",
+        )
+        assert sh.derived_eei_exemption == "AES_ITN"
+        assert ShippoAdapter("shippo_test_x")._customs(sh) is not None
+
+    def test_high_value_without_an_itn_produces_no_declaration(self) -> None:
+        big = z.Item("gold bar", quantity=1, value=Decimal("5000"), weight=LB)
+        sh = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(big,)),))
+        assert ShippoAdapter("shippo_test_x")._customs(sh) is None, (
+            "filing a false exemption is worse than refusing"
+        )
+
+    def test_duty_liability_reaches_the_declaration(self) -> None:
+        a = ShippoAdapter("shippo_test_x")
+        assert a._customs(self._intl(duties_paid_by=z.DutiesPaidBy.SENDER))["incoterm"] == "DDP"
+        assert a._customs(self._intl(duties_paid_by=z.DutiesPaidBy.RECIPIENT))["incoterm"] == "DDU"
+        assert "incoterm" not in a._customs(self._intl())
+
+
+class TestFlatRateEndToEnd:
+    """The pre-flight check, not just the payload builder.
+
+    `Parcel.has_dimensions` existed, was unit-tested, and no adapter read it, so
+    every flat-rate parcel was refused before a request was built. The unit test
+    called `_parcel()` directly and so never saw it.
+    """
+
+    def test_shippo_pre_flight_accepts_a_template(self) -> None:
+        import shipzil.providers.shippo as sp
+
+        p = z.Parcel(weight=LB, packaging=z.PackagingTemplate("USPS_FlatRateEnvelope"))
+        assert sp._dimension_gap(p) is None, "a template satisfies the size requirement"
+
+    def test_shippo_pre_flight_still_rejects_a_bare_weight(self) -> None:
+        import shipzil.providers.shippo as sp
+
+        gap = sp._dimension_gap(z.Parcel(weight=LB))
+        assert gap is not None and gap.code is z.ExclusionCode.DIMENSIONS_REQUIRED
+
+    def test_v1_sends_package_code_without_dimensions(self) -> None:
+        a = ShipStationV1Adapter("k", "s", carriers=("stamps_com",))
+        sh = z.Shipment(
+            FROM, TO, (z.Parcel(weight=LB, packaging=z.PackagingTemplate("flat_rate_envelope")),)
+        )
+        captured: dict[str, object] = {}
+        import shipzil.providers.shipstation_v1 as s1
+
+        original = s1.request
+        s1.request = lambda *a, **k: (captured.update(k.get("json") or {}), (200, []))[1]  # type: ignore[assignment]
+        try:
+            a._rates_for_carrier("stamps_com", sh)
+        finally:
+            s1.request = original  # type: ignore[assignment]
+        assert captured["packageCode"] == "flat_rate_envelope"
+        assert "dimensions" not in captured
