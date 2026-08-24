@@ -45,6 +45,17 @@ dev = [
   "pytest>=8,<9; python_version < '3.10'",
   "mypy>=2.3; python_version >= '3.10'",
 ]
+# Docs only. Kept out of `dev` so `uv sync` for a code change stays fast, and
+# out of the library entirely — `dependencies` is empty on purpose and stays that
+# way. Build with `make docs` / `uv run --group docs mkdocs serve`.
+# mkdocs is pinned below 2.0 on purpose. The Material maintainers state that
+# MkDocs 2.0 removes the plugin system and the theming system with no migration
+# path, which would break this site silently on a fresh install. Revisit when
+# that has settled; an unpinned docs build is a surprise waiting to happen.
+docs = [
+  "mkdocs>=1.6,<2",
+  "mkdocs-material>=9.5,<10",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["shipzil"]

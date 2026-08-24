@@ -10,3 +10,6 @@ build/
 
 # Scraped provider API docs. Reference only, never committed.
 .apidocs/
+
+# Built docs site. `mkdocs build` output, never committed.
+site/

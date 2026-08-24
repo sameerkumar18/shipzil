@@ -16,6 +16,11 @@ EasyPost or Shippo contract, your negotiated rates, and your carrier
 connections. What you stop doing is rewriting your integration every time you
 add or switch one.
 
+**Documentation:** [sameerkumar18.github.io/shipzil](https://sameerkumar18.github.io/shipzil/)
+— quickstart, the object model, a per-provider support matrix, an international
+shipping guide, and the [roadmap](docs/roadmap.md). Build locally with
+`make docs`.
+
 ## The thing that made me build this
 
 Ask five shipping APIs to rate three boxes. You get five different answers, and
@@ -298,37 +303,31 @@ loop. If you want concurrency, run it in a thread pool.
 
 ## Roadmap
 
-Shipped:
+Full version, with dependencies and the reasoning: **[docs/roadmap.md](docs/roadmap.md)**.
 
-- EasyPost, including automatic `/orders` routing for multi-parcel
-- ShipStation v2, native `packages[]`
-- Shippo, with its prose failures normalised into structured exclusions
-- Easyship, including item-to-box packing
-- Multi-parcel emulation for the four surfaces that lack it
-- Buy and void, spend limits, `dry_run`
-- ShipStation v1, the legacy surface: rates per carrier and merges, and reports
-  no currency rather than assuming one
-- Honest idempotency: EasyPost enforces a key, and the three providers that
-  publish no such header refuse one instead of silently discarding it
-- 110 tests, including parser tests against captured real payloads
+The short form:
 
-Next, roughly in order:
+- **Shipped** — five providers, multi-parcel on all six surfaces, buy and void,
+  customs and duty liability across all five with per-provider bases declared,
+  spend limits, `dry_run`, 150 tests
+- **Next** — PyPI release as v0.2.0, then **canonical carrier and service
+  identity**, which everything else depends on
+- **Then** — a **resilience-first router**: ask for "USPS Ground Advantage" and
+  get it from the healthiest source in a merchant-configured preference order.
+  Pinned per carrier-day so you do not end up with a manifest per source.
+- **Later** — cross-provider rate shopping (blocked on service identity),
+  tracking, `tax_identifiers` for EU traffic, USPS HS-code enforcement
+- **Not planned** — address validation, insurance, manifest *generation*, batch,
+  returns
 
-- **PyPI release** as v0.2.0, so the install instructions above get shorter.
-  The name is currently unclaimed, not reserved.
-- **Failover**, `Client(primary=..., fallback=[...])`.
+Two decisions worth flagging, because they changed:
 
-Later, once the core is boring and stable:
-
-- Rate shopping across several providers in one call
-- Tracking, and webhook payload normalisation
-- Customs and duties beyond the minimum Easyship demands
-- An async client, if there is real demand for one
-
-Not planned, so you can rule shipzil out quickly: address validation,
-insurance, manifests, batch, returns. Every one of those pulled the previous
-attempt at this library out of shape. If it isn't on the path to getting a
-label out the door, it isn't in v1.
+- Failover is a separate `Router` type, not `Client(primary=, fallback=[])`. That
+  earlier shape holds no state, so it cannot pin a carrier-day and would fragment
+  manifests on every failover.
+- Manifest **awareness** is now in scope, where it was previously ruled out.
+  Manifest *generation* is still out. A router that ignores manifest grouping
+  creates an operational problem worse than the downtime it solves.
 
 ## Development
 
