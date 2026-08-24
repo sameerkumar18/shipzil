@@ -11,17 +11,19 @@ rather than their prose documentation. Specs were scraped into `.apidocs/`
 | Easyship | `developers.easyship.com/llms.txt` → 213 reference pages with inline OpenAPI |
 | ShipStation v1 | `shipstation.com/docs/api/*` HTML |
 
-EasyPost is **absent, and the reason is worse than "on purpose"**. Its
-repositories are off-limits, and no go-ahead was given for `docs.easypost.com`
-either — but on top of that, the scrape that *was* attempted silently failed.
-`.apidocs/easypost/` contains six plausibly-named `.md` files that are all the
-same 39,193-byte 404 page (MD5 `a0f08e70…`), with zero occurrences of
-`hs_tariff_number`, `eel_pfc` or `customs_info`. So the directory looks like
-evidence and is not.
+EasyPost was **absent for two compounding reasons, both now resolved.** Its docs
+were off-limits pending clearance, and the scrape that had been attempted
+silently failed: `.apidocs/easypost/` still contains six plausibly-named `.md`
+files that are all the same 39,193-byte 404 page (MD5 `a0f08e70…`), with zero
+occurrences of `hs_tariff_number`, `eel_pfc` or `customs_info`. The directory
+looked like evidence and was not, which is worth leaving in place as a caution:
+**that directory is not a source, delete or re-scrape it before trusting it.**
 
-Every gap below that mentions EasyPost is unverified for that provider, and so is
-**`EasyPostAdapter.customs_value_basis`**, which is why it reads `"unverified"`
-rather than naming a basis.
+`docs.easypost.com` has since been read. `customs_value_basis`, `incoterm_style`
+and `hazmat_fields` are now sourced rather than assumed — see the EasyPost section
+of `docs/API-REALITY.md`, including the correction of a wrong accusation made
+while the docs were still unread. Gaps below that predate that pass and are marked
+where they have been superseded.
 
 Ordered by commercial risk, not by effort.
 
@@ -230,6 +232,23 @@ has ever produced a failure — they are simply unreachable through shipzil.
 - `CustomsExporterIdentification`, `CustomsTaxIdentification`,
   `CustomsInvoicedCharges`.
 - The wider `incoterm` values `FCA`, `DAP`, `eDAP`.
+
+**EasyPost** (read after this section was first written)
+
+- `options.duty_payment` — `{type: SENDER|THIRD_PARTY|RECEIVER, account, country,
+  postal_code}`, for billing duty to a third-party account. FedEx and UPS only,
+  and *"may not be supported for EasyPost Wallet carrier account types"*.
+  shipzil expresses only sender-vs-recipient via `options.incoterm`, so
+  third-party duty billing is unreachable.
+- `options.payment` — the same shape for **postage** billing, including
+  `COLLECT`. Unmodelled, so every label bills the sender.
+- `options.hazmat` — the full enum. shipzil emits only `dry_ice` and `alcohol`;
+  see API-REALITY for why lithium is deliberately not mapped.
+- `options.suppress_etd`, `invoice_number`, `customs_info.declaration`,
+  `contents_explanation`, `restriction_comments`, and CustomsItem
+  `manufacturer` / `eccn` / `printed_commodity_identifier`.
+- **UPS caps customs items at 100.** shipzil does not check, so a 101-item
+  shipment fails at purchase with a carrier error rather than a shipzil gap.
 
 **ShipStation v1**
 
@@ -516,9 +535,12 @@ downstream reader would otherwise take them as measured:
 
 ### Deliberately not claimed
 
-`EasyPostAdapter.hazmat_fields` is empty and its purchase-path notes cite only
-recorded traffic, because neither its repositories nor `docs.easypost.com` have
-been consulted. That is a permissions boundary, not a statement about EasyPost.
+**Superseded.** This previously said `EasyPostAdapter.hazmat_fields` is empty
+because `docs.easypost.com` had not been consulted. It has now been read:
+`hazmat_fields` is `{dry_ice, contains_alcohol}`, which is what the adapter
+emits, not the larger set EasyPost supports. Lithium and the fully regulated
+classes remain unclaimed on purpose — mapping PI965/966/967 onto EasyPost's
+`CLASS_9_*` values is a regulatory classification, not a rename.
 
 ### Still unresolved
 

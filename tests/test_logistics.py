@@ -85,7 +85,10 @@ class TestDutyLiability:
         (ShippoAdapter("shippo_test_x"), "DDP", "DDU"),
         (EasyshipAdapter("sand_x"), "DDP", "DDU"),
         (ShipStationV2Adapter("k"), "ddp", "ddu"),
-        (EasyPostAdapter("EZTKx"), None, None),
+        # EasyPost's options.incoterm enum has no DDU, and its docs say anything
+        # other than DDP puts duties on the recipient, so recipient-pays is
+        # expressed by omitting the field.
+        (EasyPostAdapter("EZTKx"), "DDP", None),
         (ShipStationV1Adapter("k", "s"), None, None),
     )
 
@@ -114,6 +117,22 @@ class TestDutyLiability:
                 assert gap.code is z.ExclusionCode.DUTIES_UNSUPPORTED
             else:
                 assert gap is None, f"{adapter.name} expresses duties, should not warn"
+
+    def test_easypost_expresses_ddp_but_has_no_ddu_token(self) -> None:
+        """options.incoterm: CFR CIF CIP CPT DAT DAP DDP EXW FAS FCA FOB.
+
+        No DDU. "Setting this value to anything other than 'DDP' will pass the
+        cost and responsibility of duties on to the recipient", so omitting is
+        the faithful expression of recipient-pays and shipzil does not invent a
+        term. Sending e.g. DAP to mean "recipient pays" would silently change
+        the delivery terms too.
+        """
+        a = EasyPostAdapter("EZTKx")
+        assert a.incoterm_style == "ddp_only"
+        assert a.render_incoterm(_ship(z.DutiesPaidBy.SENDER)) == "DDP"
+        assert a.render_incoterm(_ship(z.DutiesPaidBy.RECIPIENT)) is None
+        # Expressible, so no gap in either direction.
+        assert a.duties_gap(_ship(z.DutiesPaidBy.RECIPIENT)) is None
 
     def test_no_duties_gap_when_the_caller_expressed_no_preference(self) -> None:
         sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
@@ -237,8 +256,19 @@ class TestHazmat:
         assert "lithium_batteries" in EasyshipAdapter("sand_x").hazmat_fields
         # v1 has no hazmat fields at all.
         assert ShipStationV1Adapter("k", "s").hazmat_fields == frozenset()
-        # Not claimed for EasyPost: its docs have not been consulted.
-        assert EasyPostAdapter("EZTKx").hazmat_fields == frozenset()
+        # EasyPost's options.hazmat is a large enum (LITHIUM, CLASS_9_*, ORMD,
+        # LIMITED_QUANTITY, DIVISION_*), with separate dry_ice/dry_ice_weight/
+        # dry_ice_medical and alcohol booleans. This was frozenset() while its
+        # docs were unread, which made shipzil warn about detail EasyPost takes.
+        # EasyPost's options.hazmat enum is large (LITHIUM, CLASS_9_*, ORMD,
+        # DIVISION_*), and `frozenset()` here was an assumption made while its
+        # docs were unread. shipzil claims only the two it actually emits:
+        # mapping PI965/966/967 onto CLASS_9_NEW_LITHIUM_INDIVIDUAL vs
+        # CLASS_9_NEW_LITHIUM_DEVICE vs CLASS_9_UNMARKED_LITHIUM is a regulatory
+        # call, so lithium stays reported as dropped rather than guessed.
+        ep = EasyPostAdapter("EZTKx").hazmat_fields
+        assert ep == frozenset({"dry_ice", "contains_alcohol"})
+        assert "lithium_batteries" not in ep
 
     def test_dropped_detail_is_reported_not_swallowed(self) -> None:
         dg = z.DangerousGoods(
@@ -609,7 +639,7 @@ class TestCustomsAcrossAllProviders:
             "shipstation_v1": "line_total",
             "shipstation_v2": "per_unit",
             "easyship": "per_unit",
-            "easypost": "unverified",
+            "easypost": "line_total",
         }
         for adapter in (
             ShippoAdapter("shippo_test_x"),
@@ -919,3 +949,78 @@ class TestFanOutPreservesTheShipment:
         source = inspect.getsource(ShippoAdapter._single_parcel_shipment)
         assert "replace(" in source
         assert "from_address=shipment.from_address" not in source
+
+
+class TestEasyPostOptionsReachTheWire:
+    """`options.incoterm` exists, so declaring support must mean sending it.
+
+    `render_incoterm` returning "DDP" while no adapter sent it would be the same
+    defined-but-never-called defect the customs builders had. EasyPost keeps duty
+    liability on `shipment.options`, not on `customs_info`, which is why this
+    adapter had nowhere to put it: it had no options block at all.
+    """
+
+    CA = z.Address(
+        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
+        name="R", phone="4165550199", email="r@example.com", country="CA",
+    )
+
+    def _sh(self, **kw: object) -> z.Shipment:
+        item = z.Item(
+            "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="610910", origin_country="US",
+        )
+        return z.Shipment(  # type: ignore[arg-type]
+            FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(item,)),), **kw
+        )
+
+    def _blob(self, shipment: z.Shipment) -> str:
+        import shipzil.providers.easypost as mod
+
+        adapter = EasyPostAdapter("EZTKx")
+        return TestCustomsReachesTheWire()._blob(
+            mod, lambda: adapter.rate_single(shipment)
+        )
+
+    def test_ddp_reaches_options_incoterm(self) -> None:
+        blob = self._blob(self._sh(duties_paid_by=z.DutiesPaidBy.SENDER))
+        assert '"incoterm": "DDP"' in blob
+
+    def test_recipient_sends_no_incoterm(self) -> None:
+        """There is no DDU token; omission is the faithful expression."""
+        blob = self._blob(self._sh(duties_paid_by=z.DutiesPaidBy.RECIPIENT))
+        assert "incoterm" not in blob
+
+    def test_unspecified_sends_no_incoterm(self) -> None:
+        assert "incoterm" not in self._blob(self._sh())
+
+    def test_dry_ice_reaches_options_in_ounces(self) -> None:
+        """EasyPost documents dry_ice_weight in ounces; ShipEngine uses kg."""
+        dg = z.DangerousGoods(dry_ice=z.DryIce(contains=True, weight=LB))
+        item = z.Item(
+            "vaccine", quantity=1, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="300215", origin_country="US",
+        )
+        sh = z.Shipment(
+            FROM, self.CA,
+            (z.Parcel(weight=LB, dimensions=BOX, items=(item,), dangerous_goods=dg),),
+        )
+        blob = self._blob(sh)
+        assert '"dry_ice": true' in blob
+        assert '"dry_ice_weight": "16.0"' in blob
+
+    def test_alcohol_reaches_options(self) -> None:
+        dg = z.DangerousGoods(contains_alcohol=True)
+        item = z.Item(
+            "wine", quantity=1, weight=z.Weight.of(6, "oz"),
+            value=Decimal("15"), hs_code="220421", origin_country="US",
+        )
+        sh = z.Shipment(
+            FROM, self.CA,
+            (z.Parcel(weight=LB, dimensions=BOX, items=(item,), dangerous_goods=dg),),
+        )
+        assert '"alcohol": true' in self._blob(sh)
+
+    def test_domestic_with_no_hazmat_sends_no_options_block(self) -> None:
+        domestic = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
+        assert "options" not in self._blob(domestic)

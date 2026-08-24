@@ -110,6 +110,13 @@ class Adapter(ABC):
     #: daf deq des`), so lowercase is what shipzil sends. Note their own example
     #: request uses `"DDP"`, so the field may well be case-insensitive; shipzil
     #: has no ShipStation credentials and has never tested that.
+    #: `"ddp_only"` -> `DDP` or nothing. EasyPost's `options.incoterm` enum has
+    #: no DDU at all (`CFR CIF CIP CPT DAT DAP DDP EXW FAS FCA FOB`), and its
+    #: docs say "anything other than 'DDP' will pass the cost and responsibility
+    #: of duties on to the recipient". So DDP is the only value worth sending and
+    #: recipient-pays is expressed by omitting the field, which is also every
+    #: carrier's default. Sending an arbitrary non-DDP term instead would change
+    #: the delivery terms as a side effect of a duty choice.
     #: `None` -> the caller's `duties_paid_by` cannot be honoured, and
     #: `duties_gap` reports that rather than dropping it silently.
     incoterm_style: str | None = "upper"
@@ -193,9 +200,14 @@ class Adapter(ABC):
         if self.incoterm_style is None:
             return None
         if shipment.duties_paid_by is DutiesPaidBy.SENDER:
-            return "DDP" if self.incoterm_style == "upper" else "ddp"
+            return "ddp" if self.incoterm_style == "lower" else "DDP"
         if shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
-            return "DDU" if self.incoterm_style == "upper" else "ddu"
+            if self.incoterm_style == "ddp_only":
+                # No DDU token exists; omission is recipient-pays. Reported by
+                # `duties_expressed_by_omission` so callers can tell the
+                # difference between "not asked" and "asked, sent nothing".
+                return None
+            return "ddu" if self.incoterm_style == "lower" else "DDU"
         # UNSPECIFIED sends nothing, so the account default applies. shipzil used
         # to hardcode DDU here, silently making the recipient liable for duty.
         return None

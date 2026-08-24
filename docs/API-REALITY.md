@@ -500,7 +500,7 @@ real defect.
 | ShipEngine / ShipStation v2 | `shipengine-openapi` repo + live `docs.shipstation.com` | vendored copy is **stale** |
 | ShipStation v1 | `shipstation.com/docs/api/models/*` | authoritative, read live |
 | Easyship | `developers.easyship.com` inline OpenAPI, vendored | authoritative |
-| EasyPost | **nothing** | see below |
+| EasyPost | `docs.easypost.com/docs/*`, read live | authoritative (see below) |
 
 The vendored ShipEngine spec is behind the live docs: its `package_contents`
 enum has six values where the live guide documents eight, adding
@@ -529,7 +529,7 @@ providers that document it want the opposite:
 | ShipStation v1 | line total | *"The value (in USD) of the line item"* |
 | ShipEngine / v2 | **per unit** | *"The declared value of \*each\* item"* (emphasis theirs) |
 | Easyship | **per unit** | *"Please note that this value refers to the unit rather than the total"* |
-| EasyPost | unknown | no source |
+| EasyPost | line total | *"Total value (unit value \* quantity)"*, in USD and oz |
 
 So ShipStation v2 was over-declaring by a factor of the quantity: two shirts at
 $15 were declared at $30 each, $60 for the line. That inflates duty and misstates
@@ -546,32 +546,49 @@ AUTO-CALCULATED … as Quantity × Item Value"**.
 `customs_value_basis`, so the choice is visible per provider instead of implied
 by which helper someone reached for.
 
-### Two citations in the code were fabricated
+### Two unverifiable citations, and one wrong accusation about them
 
-Both were specific, quoted, attributed to a provider, and used to justify a
-decision. Neither can be sourced.
+An earlier revision of this section called both of the following **fabricated**.
+That was itself an overreach, and correcting it matters more than the original
+point, so the correction comes first.
 
-**1. EasyPost, quoted as documenting `"Total value (unit value * quantity)"`** in
-three places. There is no such reading: the docs were never consulted and the
-local scrape is 404s. This was the justification for line totals on EasyPost, and
-it is now marked `customs_value_basis = "unverified"` — because the honest
-position is not that line totals are wrong, but that nobody checked. Note the
-live purchase succeeding is *no* evidence: a wrong declared value is accepted just
-as readily as a right one.
+**1. EasyPost, quoted as documenting `"Total value (unit value * quantity)"`.**
+This was called invented because it could not be sourced — the docs had not been
+read and the local scrape is 404s. Once `docs.easypost.com/docs/customs-items`
+was actually opened, the CustomsItem table reads:
+
+```
+value    float (USD)   Total value (unit value * quantity). Must be greater than zero.
+weight   float (oz)    Total weight (unit weight * quantity). Must be greater than zero.
+```
+
+**The citation was verbatim correct**, both strings, including the units. EasyPost
+belongs with Shippo and ShipStation v1 on line totals, `customs_value_basis` is
+`"line_total"`, and the original code was right all along.
+
+So there were two errors here, and they are the same error twice. First: stating a
+claim as a citation without having checked it in this session. Second, and worse:
+concluding from *absence of evidence* that it had been made up. A confident
+negative is a claim too, and it needs evidence just as much as the positive did.
+The right label was never "fabricated" — it was **"unverified"**, which is what
+the code now says where verification is genuinely absent.
 
 **2. ShipStation v2, quoted as rejecting `delivery_duty_paid` with `"Unknown
-TermsOfTradeCode value"`** in two places. shipzil has no ShipStation credentials
-of any kind, so that error was never seen. `grep -ri termsoftrade .probe/` returns
-nothing; the only ShipStation v2 error ever recorded is *"carrier 30718 does not
-support multipackage"*. The **conclusion** was right for an unrelated reason —
-the documented enum really is lowercase (`exw fca cpt cip dpu dap ddp fas fob cfr
-cif ddu daf deq des`) — but the evidence was invented. Worth noting their own
-example request sends `"DDP"` uppercase, so the field may be case-insensitive and
-shipzil has never tested it.
+TermsOfTradeCode value"`.** Still unverified, and unverifiable here: shipzil has
+no ShipStation credentials, `grep -ri termsoftrade .probe/` returns nothing, and
+the only recorded v2 error is *"carrier 30718 does not support multipackage"*. Given
+how the EasyPost one turned out, the honest reading is **not** that this was
+invented either — it may well be a real error message. It simply cannot be
+confirmed from here, so it no longer appears as evidence. What replaced it is
+checkable: the documented enum is lowercase (`exw fca cpt cip dpu dap ddp fas fob
+cfr cif ddu daf deq des`), which is what shipzil sends. Their own example request
+uses `"DDP"` uppercase, so the field may be case-insensitive; untested.
 
-The pattern in both: a real decision, dressed in a quotation that made it look
-measured. A comment saying "assumed, unverified" would have been worth more,
-because it would have flagged itself for exactly this pass.
+The lesson survives the correction, just aimed differently. The problem was never
+that the content was wrong — one claim was exactly right and the other may be. The
+problem is that a quotation reads as measured, so an unchecked one spends
+credibility it has not earned, and it takes a docs pass to find out which kind it
+was. `# assumed, unverified` costs nothing and flags itself.
 
 ### What checked out, verbatim
 
@@ -598,6 +615,76 @@ because it would have flagged itself for exactly this pass.
 - EasyPost's prose `eel_pfc` — `"NOEEI 30.37(a)"` rather than the token — is
   verified, not by documentation but by a successful live international purchase
   carrying it in the request body.
+
+### EasyPost: three defaults that were assumptions, not decisions
+
+Reading the docs settled all three, and two of them were wrong in opposite
+directions — one under-claiming, one over-warning.
+
+| Attribute | Was | Now | Source |
+|---|---|---|---|
+| `customs_value_basis` | line totals, uncited | `line_total`, cited | CustomsItem: *"Total value (unit value \* quantity)"* |
+| `incoterm_style` | `None` — "drops duties silently" | `ddp_only` | `options.incoterm` |
+| `hazmat_fields` | `frozenset()` — "docs not consulted" | `{dry_ice, contains_alcohol}` | `options.hazmat`, `dry_ice*`, `alcohol` |
+
+**Duty liability was never absent, it was in a place this adapter did not build.**
+EasyPost keeps it on `shipment.options`, not on `customs_info`. shipzil had wired
+the customs block and had no options block at all, so `duties_paid_by` had nowhere
+to go — and the measurement that "DDP and DDU produce byte-identical payloads" was
+correct but led to the wrong conclusion. The field was missing because shipzil
+never sent one, not because EasyPost lacks one.
+
+Two details matter. First, **EasyPost's incoterm enum has no DDU**: `CFR CIF CIP
+CPT DAT DAP DDP EXW FAS FCA FOB`. The docs say *"Setting this value to anything
+other than 'DDP' will pass the cost and responsibility of duties on to the
+recipient"*, so DDP is the only value that changes anything, and recipient-pays is
+expressed by omitting the field. Sending `DAP` to mean "recipient pays" would
+alter the delivery terms as a side effect of a duty choice, so shipzil omits.
+That is a third incoterm spelling — `"ddp_only"` — which the two-style upper/lower
+abstraction did not anticipate.
+
+Second, **DDP changes which rates come back**, measured on the test key, same
+shipment, only `duties_paid_by` differing:
+
+```
+duties_paid_by=SENDER      14 rates   options.incoterm = "DDP"
+duties_paid_by=RECIPIENT   18 rates   no incoterm sent
+unspecified                18 rates   no incoterm sent
+```
+
+Four of eighteen services will not carry DDP. Purchased successfully at
+`LM000024506US`. So this is the same shape as hazmat: a customs flag is not a
+price modifier, it is a filter on the carrier set.
+
+**On hazmat, the correction is deliberately partial.** `options.hazmat` is a large
+enum — `LITHIUM`, `ORMD`, `LIMITED_QUANTITY`, `CLASS_1`, `CLASS_3`, `CLASS_7`,
+`CLASS_8_*`, `CLASS_9_*`, `DIVISION_4_1` through `DIVISION_6_2`, and more — plus
+separate `dry_ice` / `dry_ice_weight` / `dry_ice_medical` and `alcohol` booleans.
+`frozenset()` was badly wrong: shipzil was warning that EasyPost would drop detail
+it handles natively.
+
+But `hazmat_fields` now lists only `dry_ice` and `contains_alcohol`, because those
+are the only two the adapter actually emits. Choosing between
+`CLASS_9_NEW_LITHIUM_INDIVIDUAL`, `CLASS_9_NEW_LITHIUM_DEVICE`,
+`CLASS_9_UNMARKED_LITHIUM` and `CLASS_9_USED_LITHIUM` from shipzil's
+PI965/966/967 model is a regulatory classification, not a rename — the same
+argument that stops shipzil inventing an EEI citation above $2,500. So lithium
+stays reported as dropped.
+
+The general rule this enforces: **`hazmat_fields` is a claim about what is sent,
+not about what the provider supports.** Widening it to match the provider's docs
+without wiring the emission would have converted an honest warning into a silent
+drop, which is strictly worse than the bug it was fixing. `options.incoterm` had
+exactly that risk — `render_incoterm` returned `"DDP"` for a while before anything
+put it in a payload, the same defect the customs builders had — so there is a
+payload test per field.
+
+Also read and not modelled: `options.duty_payment` (a `{type, account, country,
+postal_code}` object for third-party duty billing, FedEx and UPS only, and *"may
+not be supported for EasyPost Wallet carrier account types"*), `options.payment`
+for postage billing, `suppress_etd`, `options.hazmat` proper, `dry_ice_medical`,
+and on CustomsItem: `manufacturer`, `eccn`, `printed_commodity_identifier`. Plus
+one hard limit worth knowing: **UPS caps customs items at 100.**
 
 ## Fan-out was quietly rewriting the shipment
 
