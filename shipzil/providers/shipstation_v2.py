@@ -35,6 +35,7 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_provider_code, code_from_text
+from ..service_id import ServiceId
 from .base import Adapter, Capabilities
 
 BASE = "https://api.shipstation.com/v2"
@@ -316,6 +317,13 @@ class ShipStationV2Adapter(Adapter):
         return Rate(
             carrier=str(data.get("carrier_friendly_name") or data.get("carrier_code") or ""),
             service=str(data.get("service_type") or ""),
+            service_id=ServiceId.build(
+                provider=self.name,
+                # carrier_code is already lowercase and stable; friendly_name
+                # carries a registered-trademark glyph ("UPS® Ground").
+                carrier=str(data.get("carrier_code") or data.get("carrier_friendly_name") or ""),
+                service=str(data.get("service_code") or data.get("service_type") or ""),
+            ),
             amount=amount,
             currency=currency.upper() if isinstance(currency, str) else None,
             delivery_days=data.get("delivery_days"),

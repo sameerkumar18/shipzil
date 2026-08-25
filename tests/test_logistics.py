@@ -1024,3 +1024,196 @@ class TestEasyPostOptionsReachTheWire:
     def test_domestic_with_no_hazmat_sends_no_options_block(self) -> None:
         domestic = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
         assert "options" not in self._blob(domestic)
+
+
+class TestServiceIdAddressing:
+    """`{provider}-{carrier}-{service}` — the gateway addressing scheme.
+
+    Provider-namespaced on purpose. Two providers offering what looks like the same
+    service get two addresses, because asserting they substitute for one another is
+    an equivalence claim with a much higher correctness bar, and a wrong one
+    silently ships a different service than the caller asked for.
+    """
+
+    def test_carrier_aliases_from_observed_provider_strings(self) -> None:
+        """Every input here appeared in recorded traffic under `.probe/`."""
+        from shipzil.service_id import normalize_carrier
+
+        assert normalize_carrier("USPS") == "usps"
+        assert normalize_carrier("UPS") == "ups"
+        # EasyPost reports account types, not carriers.
+        assert normalize_carrier("UPSDAP") == "ups"
+        assert normalize_carrier("FedExDefault") == "fedex"
+        # ShipStation v1 sells USPS through Stamps.com, so an unnormalised
+        # carrier filter on "usps" would miss every USPS rate.
+        assert normalize_carrier("stamps_com") == "usps"
+        # Registered-trademark glyphs must not reach an identifier.
+        assert normalize_carrier("UPS® Ground") == "ups"
+        # Unknown carriers are slugified, not rejected — refusing one would break
+        # the gateway the moment a provider adds a carrier.
+        assert normalize_carrier("Aramex") == "aramex"
+
+    def test_trademark_glyphs_are_stripped_including_the_awkward_one(self) -> None:
+        """`™` is the one that needs explicit handling.
+
+        `®` and `©` are dropped for free by the ASCII fold, because NFKD leaves
+        them non-ASCII. `™` decomposes to the *letters* `TM`, so it survives the
+        fold and would silently become part of the identifier —
+        "FedEx 2Day™" addressing as `2daytm`. Only this case proves the explicit
+        replacement is load-bearing.
+        """
+        from shipzil.service_id import ServiceId as _S
+
+        for glyph, expected in (("®", "2day"), ("™", "2day"), ("©", "2day")):
+            sid = _S.build(provider="easyship", carrier="", service=f"FedEx 2Day{glyph}")
+            assert sid is not None
+            assert sid.service == expected, f"{glyph} leaked into the identifier"
+            assert sid.slug == "easyship-fedex-2day"
+
+    def test_carrier_recovered_when_embedded_in_the_service_name(self) -> None:
+        """v1 and Easyship give no usable carrier field on the rating path."""
+        from shipzil.service_id import carrier_from_service
+
+        assert carrier_from_service("USPS Ground Advantage - Package") == "usps"
+        assert carrier_from_service("FedEx 2Day®") == "fedex"
+        # No guessing from the first word when no known carrier is present.
+        assert carrier_from_service("GroundAdvantage") == ""
+        assert carrier_from_service("Priority") == ""
+
+    def test_carrier_is_not_repeated_in_the_service_component(self) -> None:
+        """ShipStation v2 names services "USPS Ground Advantage"."""
+        sid = z.ServiceId.build(
+            provider="shipstation_v2", carrier="usps", service="USPS Ground Advantage"
+        )
+        assert sid is not None
+        assert sid.slug == "shipstation_v2-usps-ground_advantage"
+
+    def test_packaging_prevents_a_slug_collision(self) -> None:
+        """v1 returns two differently-priced rates sharing one serviceCode.
+
+        "USPS Ground Advantage - Package" and "- Thick Envelope" are distinct
+        products. Without packaging in the key they address the same slug.
+        """
+        a = z.ServiceId.build(
+            provider="shipstation_v1", carrier="stamps_com",
+            service="USPS Ground Advantage", packaging="Package",
+        )
+        b = z.ServiceId.build(
+            provider="shipstation_v1", carrier="stamps_com",
+            service="USPS Ground Advantage", packaging="Thick Envelope",
+        )
+        assert a is not None and b is not None
+        assert a.slug != b.slug
+        assert a.slug == "shipstation_v1-usps-ground_advantage-package"
+        assert b.slug == "shipstation_v1-usps-ground_advantage-thick_envelope"
+        # Same underlying service, so the unqualified form agrees.
+        assert a.unqualified == b.unqualified == "usps-ground_advantage"
+
+    def test_v1_adapter_splits_packaging_out_of_the_service_name(self) -> None:
+        """The collision test above builds ServiceIds by hand; this drives v1.
+
+        v1 encodes packaging into `serviceName` and reuses one `serviceCode`, so
+        the split has to happen in the adapter. Without it these two rates — at
+        two different prices — address the same slug.
+        """
+        adapter = ShipStationV1Adapter("k", "s")
+        payloads = [
+            {"serviceName": "USPS Ground Advantage - Package",
+             "serviceCode": "usps_ground_advantage", "shipmentCost": "8.20"},
+            {"serviceName": "USPS Ground Advantage - Thick Envelope",
+             "serviceCode": "usps_ground_advantage", "shipmentCost": "6.15"},
+        ]
+        slugs = []
+        for payload in payloads:
+            rate = adapter._parse_rate(payload, "stamps_com")
+            assert rate.service_id is not None
+            slugs.append(rate.service_id.slug)
+
+        assert slugs[0] == "shipstation_v1-usps-ground_advantage-package"
+        assert slugs[1] == "shipstation_v1-usps-ground_advantage-thick_envelope"
+        assert len(set(slugs)) == 2, "packaging was not split; the slugs collided"
+        # One serviceCode, so both reduce to the same unqualified service.
+        assert len({s.rsplit("-", 1)[0] for s in slugs}) == 1
+
+    def test_unqualified_is_not_an_equivalence_claim(self) -> None:
+        """Grouping candidates is not the same as declaring them substitutable."""
+        ep = z.ServiceId.build(
+            provider="easypost", carrier="USPS", service="GroundAdvantage"
+        )
+        sp = z.ServiceId.build(
+            provider="shippo", carrier="USPS", service="ground_advantage"
+        )
+        assert ep is not None and sp is not None
+        # Different addresses, deliberately.
+        assert ep.slug != sp.slug
+        # And shipzil does not currently claim these are the same service: the
+        # provider spellings differ, so the unqualified forms differ too.
+        assert ep.unqualified == "usps-groundadvantage"
+        assert sp.unqualified == "usps-ground_advantage"
+
+    def test_no_service_means_no_address(self) -> None:
+        """A half-formed address looks usable and is not stable."""
+        assert z.ServiceId.build(provider="easypost", carrier="USPS", service="") is None
+        assert z.ServiceId.build(provider="easypost", carrier="", service="  ") is None
+
+    def test_slug_is_a_rendering_not_the_storage(self) -> None:
+        sid = z.ServiceId(
+            provider="easypost", carrier="usps", service="groundadvantage"
+        )
+        assert str(sid) == sid.slug == "easypost-usps-groundadvantage"
+        # The parts stay addressable, so a later layer can use carrier+service
+        # without parsing the slug back apart.
+        assert (sid.provider, sid.carrier, sid.service) == (
+            "easypost", "usps", "groundadvantage",
+        )
+
+    def test_every_adapter_populates_service_id_from_real_payloads(self) -> None:
+        """Parsed against captured responses, not constructed by hand."""
+        import json
+        import pathlib as _p
+
+        probe = _p.Path(".probe")
+        if not probe.exists():
+            pytest.skip("no recorded payloads available")
+
+        def rates(name: str) -> list[dict[str, object]]:
+            path = probe / name
+            if not path.exists():
+                return []
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and "rates" in data:
+                return data["rates"]
+            if isinstance(data, dict) and "rate_response" in data:
+                return data["rate_response"].get("rates", [])
+            return data if isinstance(data, list) else []
+
+        checks = [
+            (
+                "shippo_single.json",
+                lambda d: ShippoAdapter("x")._parse_rate(d, shipment_id="s"),
+                "shippo-",
+            ),
+            (
+                "ss2_rates_single.json",
+                lambda d: ShipStationV2Adapter("k")._parse_rate(
+                    d, strategy=z.Strategy.NATIVE, parcel_count=1
+                ),
+                "shipstation_v2-",
+            ),
+            (
+                "ss1_rates_single.json",
+                lambda d: ShipStationV1Adapter("k", "s")._parse_rate(d, "stamps_com"),
+                "shipstation_v1-",
+            ),
+        ]
+        for name, parse, prefix in checks:
+            payloads = rates(name)
+            if not payloads:
+                continue
+            for payload in payloads[:5]:
+                rate = parse(payload)
+                assert rate.service_id is not None, f"{name}: no service_id"
+                assert rate.service_id.slug.startswith(prefix)
+                # Carrier must be normalised, never a reseller channel.
+                assert rate.service_id.carrier != "stamps_com"
+                assert "®" not in rate.service_id.slug

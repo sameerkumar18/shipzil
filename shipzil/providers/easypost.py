@@ -28,6 +28,7 @@ from ..models import (
     Shipment,
     Strategy,
 )
+from ..service_id import ServiceId
 from .base import Adapter, Capabilities
 
 BASE = "https://api.easypost.com/v2"
@@ -402,6 +403,13 @@ class EasyPostAdapter(Adapter):
         return Rate(
             carrier=str(data.get("carrier") or ""),
             service=str(data.get("service") or ""),
+            service_id=ServiceId.build(
+                provider=self.name,
+                # EasyPost reports UPS as "UPSDAP" and FedEx as "FedExDefault",
+                # which are account types rather than carriers.
+                carrier=str(data.get("carrier") or ""),
+                service=str(data.get("service") or ""),
+            ),
             amount=Decimal(str(data.get("rate") or "0")),
             currency=data.get("currency"),
             delivery_days=int(days) if days is not None else None,

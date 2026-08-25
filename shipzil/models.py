@@ -12,6 +12,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 
+from .service_id import ServiceId
 from .units import Dimensions, Weight
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "Quote",
     "Rate",
     "RegulationLevel",
+    "ServiceId",
     "Shipment",
     "Strategy",
     "TrackingLeg",
@@ -566,6 +568,9 @@ class Rate:
     #: ("fuel_surcharge", 3.03). Their sum need not equal amount - base_amount;
     #: no provider guarantees that, so shipzil does not assert it.
     surcharges: tuple[tuple[str, Decimal], ...] = ()
+    #: Stable gateway address, `{provider}-{carrier}-{service}`. `None` when the
+    #: provider gave nothing identifiable to address. See `shipzil.service_id`.
+    service_id: ServiceId | None = None
     raw: Any = None
 
     @property

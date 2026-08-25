@@ -90,7 +90,8 @@ multi-parcel bugs happen.
 ### Rate
 
 ```python
-rate.carrier        # "USPS"           — provider's spelling, not canonical yet
+rate.service_id     # ServiceId — the stable gateway address
+rate.carrier        # "USPS"           — provider's spelling, unnormalised
 rate.service        # "GroundAdvantage" — likewise
 rate.amount         # Decimal
 rate.provider       # "easypost"       — who quoted this, and who must sell it
@@ -101,13 +102,55 @@ rate.surcharges     # itemised, where the provider breaks them out
 rate.raw            # the provider's own payload, as an escape hatch
 ```
 
-!!! note "`carrier` and `service` are not canonical across providers"
+### `ServiceId` — the stable address
+
+`rate.carrier` and `rate.service` are whatever the provider called them.
+`rate.service_id` is the stable form, `{provider}-{carrier}-{service}`:
+
+```python
+rate.service_id.slug          # "easypost-usps-groundadvantage"
+rate.service_id.provider      # "easypost"
+rate.service_id.carrier       # "usps"   — normalised
+rate.service_id.service        # "groundadvantage" — the provider's, slugified
+rate.service_id.packaging     # set only where the provider distinguishes it
+rate.service_id.unqualified   # "usps-groundadvantage"
+```
+
+Two rules explain most of its behaviour:
+
+**The carrier is normalised; the service is not.** Carriers are a small closed set,
+and normalising them fixes real breakage — EasyPost reports UPS as `UPSDAP` and
+FedEx as `FedExDefault`, which are account types, and ShipStation v1 sells USPS
+under the reseller code `stamps_com`. Without normalisation, filtering on `usps`
+silently misses every USPS rate from v1. Services are open-ended per provider, and
+normalising them would mean deciding which services are equivalent.
+
+**Packaging joins the key where a provider needs it.** ShipStation v1 returns
+`"USPS Ground Advantage - Package"` and `"- Thick Envelope"` as two rates at two
+prices sharing one service code. Without packaging in the address they collide.
+
+!!! warning "`unqualified` is not an equivalence claim"
+    Two providers can produce the same `unqualified` value for services that are
+    not interchangeable — a DDP-capable rate and a non-DDP one being the obvious
+    case. It exists so a later layer can group candidates. Deciding that a group is
+    *substitutable* is a separate judgement, and shipzil does not make it yet.
+
+    Measured live: `easypost-usps-priority` and `shippo-usps-priority` both reduce
+    to `usps-priority`, at the same price. Almost certainly the same service — and
+    "almost certainly" is exactly why the gateway addresses them separately.
+
+!!! note "`carrier` and `service` are the provider's spelling, not a shared one"
     The same USPS service is `GroundAdvantage` on EasyPost, `Ground Advantage` on
     Shippo, `USPS Ground Advantage` on ShipStation v2 and
     `usps_ground_advantage` on v1 — which also returns two rates sharing that
-    code, differing only by packaging. Canonical service identity is on the
-    [roadmap](roadmap.md#a1-canonical-carrier-and-service-identity); until then,
-    do not compare `rate.service` strings across providers.
+    code, differing only by packaging.
+
+    Stable addressing of the form `{provider}-{carrier}-{service}` is on the
+    [roadmap](roadmap.md#stable-service-addressing). Note that it addresses each
+    provider's service separately on purpose: two providers offering what looks
+    like the same service are two addresses, because claiming they substitute for
+    each other is a different and much riskier claim. Until then, do not compare
+    `rate.service` strings across providers.
 
 ### Label
 

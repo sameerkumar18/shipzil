@@ -1,32 +1,34 @@
 # Roadmap
 
-Where shipzil is, and where it is going. Dates are deliberately absent; ordering
-and dependencies are not.
+Where shipzil is and where it is going. Ordering and dependencies are real; dates
+are deliberately absent.
 
-The medium-term direction is a **carrier-first router**: a merchant asks for
-"USPS Ground Advantage", and shipzil obtains it from the healthiest available
-source — the USPS API directly, or EasyPost, or Shippo — according to a
-preference order the merchant sets. The value is uptime, not arbitrage.
+shipzil is a **shipping gateway**: one Python interface to every provider, with a
+stable address for each carrier service, and provider differences surfaced rather
+than hidden. The near-term goal is that adding or switching a provider is a
+configuration change rather than a rewrite.
 
 ---
 
 ## Shipped
 
-- **Five providers**: EasyPost (with automatic `/orders` routing), ShipStation v2
-  (native `packages[]`), Shippo (prose failures normalised into structured
-  exclusions), Easyship (including item-to-box packing), ShipStation v1 (legacy,
-  rates per carrier and merges)
-- **Multi-parcel** on all six surfaces, emulated on the four that lack it, and
+- **Five providers** — EasyPost (with automatic `/orders` routing for
+  multi-parcel), ShipStation v2 (native `packages[]`), Shippo (prose failures
+  normalised into structured exclusions), Easyship (including item-to-box packing),
+  ShipStation v1 (legacy: rates per carrier, then merges)
+- **Multi-parcel on all six surfaces**, emulated on the four that lack it, and
   always labelled so a combined rate is never mistaken for a native one
-- **Buy and void**, spend limits, `dry_run`
-- **Honest idempotency**: EasyPost enforces a key; the providers that publish no
-  such header refuse one rather than silently discarding it
-- **Customs on all five providers**, with the per-unit-versus-line-total basis
-  declared per provider, EEI citations rendered per provider, and refusal above
-  the \$2,500 threshold rather than a fabricated exemption
-- **Duty liability** mapped through one shared renderer, with
-  `DUTIES_UNSUPPORTED` reported where a provider has no field
-- **150 tests**, including parser tests against captured real payloads, and
+- **Normalised errors** — an 11-code exclusion taxonomy, provider prose parsed into
+  structured reasons, and a short rate list that always explains itself
+- **Buy and void**, spend limits enforced before any network call, `dry_run`
+- **Customs on all five providers** — per-unit versus line-total basis declared per
+  provider, EEI citations rendered per provider, and refusal above the \$2,500
+  threshold rather than a fabricated exemption
+- **Duty liability** through one shared mapping, with `DUTIES_UNSUPPORTED` reported
+  where a provider has no field for it
+- **Honest idempotency** — EasyPost enforces a key; providers that publish no such
+  header refuse one rather than silently discarding it
+- **150 tests**, including parser tests against captured real payloads and
   payload-level tests asserting what each adapter puts on the wire
 
 ---
@@ -36,15 +38,14 @@ preference order the merchant sets. The value is uptime, not arbitrage.
 ### v0.2.0 — make it installable
 
 - **PyPI release.** The name is currently unclaimed, not reserved.
-- **Public repository**, so the docs can be hosted and issues filed.
-- Nothing else. This release is about distribution, not features.
+- **Public repository**, so docs can be hosted and issues filed.
 
-### A1 — canonical carrier and service identity
+Distribution only. No features.
 
-**The prerequisite for everything below**, and load-bearing sooner than it looks.
+### Stable service addressing
 
 Today `Rate.carrier` and `Rate.service` are whatever the provider called them. The
-same USPS service appears as:
+same USPS service arrives as:
 
 ```
 EasyPost         USPS                             | GroundAdvantage
@@ -58,124 +59,100 @@ Carrier names fragment too — `USPS`, `UPSDAP`, `UPS`, `UPS® Ground`,
 `stamps_com`, so the "carrier" field is the reseller channel rather than the
 carrier.
 
-Identity is the **triple** `(carrier, service, packaging)`, not a pair: v1 returns
-two rates sharing `usps_ground_advantage`, differing only by packaging.
+Every rate gets a stable, addressable identifier:
+
+```
+{provider}-{carrier}-{service}
+
+easypost-usps-groundadvantage
+shippo-usps-ground_advantage
+shipstation_v2-usps-usps_ground_advantage
+```
 
 Planned:
 
-- `CarrierId` / `ServiceId` value types on `Rate`, **nullable** — `None` where a
-  mapping is not confident, never a guess
-- mapping declared per adapter as a class attribute, following the existing
-  `customs_value_basis` / `eei_style` / `incoterm_style` pattern
-- mappings derived from captured traffic, with a test per provider
-- scoped to USPS first, and only the services in real use
+- a structured `ServiceId` on `Rate` — provider, carrier, service, and optional
+  packaging, with a `.slug` for display and storage
+- **`carrier` normalised**, because it is a small closed set and it fixes
+  `stamps_com` appearing where `usps` belongs
+- **`service` left as the provider spells it**, because normalising it means
+  deciding which services are equivalent, and that is a separate problem with a
+  much higher correctness bar
+- packaging included where a provider needs it: v1 returns two rates sharing
+  `usps_ground_advantage`, differing only by packaging
 
-!!! warning "Why this is needed for failover, not just for price comparison"
-    Failover has to land on the **same** service. A wrong mapping silently ships a
-    different service, which is worse than the outage being routed around. So this
-    is safety-critical even with no cross-provider price comparison anywhere in
-    the picture.
+!!! note "Why the provider is part of the address"
+    `easypost-usps-groundadvantage` and `shippo-usps-ground_advantage` are
+    different addresses on purpose. They may well be the same service, but
+    asserting that is an equivalence claim, and an incorrect one silently ships a
+    different service than the caller asked for. The gateway addresses what
+    exists; it does not yet claim what substitutes for what.
 
-### A2 — shared source vocabulary
+### Service catalog
 
-The library and the [status page](https://github.com/sameerkumar18/shipzil) do not
-agree on what a source is called. The library has five adapters
-(`easypost`, `shippo`, `shipstation_v1`, `shipstation_v2`, `easyship`); the status
-feed has four platforms (`easypost`, `shippo`, `shipstation`, `shipengine`).
-`easyship` is absent, and `shipstation` / `shipengine` do not map cleanly onto
-`v1` / `v2`. Reconcile before anything consumes the feed programmatically.
+`client.services()` — what you can address through this provider, with the
+capability flags already declared per adapter (customs basis, hazmat fields,
+multi-parcel support). Discovery is what makes addressing usable.
 
-### A3 — the manifest group, written down
+### Configured fallback
 
-A first-class constraint before anything is designed around it implicitly. See
-[the manifest problem](#the-manifest-problem-and-a-reversed-decision) below.
+Declarative, caller-stated, no decisions made on your behalf:
 
----
+```python
+order=[...]              # try these providers in this sequence
+allow_fallbacks=True     # or fail rather than moving on
+only=[...]              # pin, and never leave this provider
+```
 
-## Then — the router
-
-Design decisions already made, so the shape is not open:
-
-| Decision | Choice | Consequence |
-|---|---|---|
-| What drives v1 | **Resilience**, not price | no cross-provider price comparison, so no service-equivalence problem to solve first |
-| Routing granularity | **Carrier-day**, pinned | one manifest normally; a second only during an incident |
-| Neutrality | **Strictly neutral**, merchant-configured | no built-in default ordering, enforced by a test |
-
-Planned shape:
-
-- `Router` as a **distinct type**, not a `Client` parameter. `Client(adapter)`
-  stays exactly as it is.
-- **Stateless.** Carrier-day pinning needs state; shipzil returns a routing
-  decision plus a serializable pin, and the caller persists it. This preserves the
-  zero-dependency, no-persistence property the library trades on, and lets a
-  hosted service persist it later without changing the library.
-- **Health injected**, combining the external status feed with local circuit
-  state. Local matters independently: account-level outages are invisible to a
-  global status page — Easyship returning `403 "API usage limit exceeded"` being a
-  worked example. The error taxonomy already distinguishes `RateLimitError` from
-  `AuthenticationError`, which is exactly the classification a breaker needs.
-- **Failover policy:** route reads freely; **never** auto-fail-over a write after
-  an ambiguous failure. `AmbiguousPurchaseError` exists for precisely this.
-
-!!! note "This supersedes the old plan"
-    An earlier roadmap described failover as `Client(primary=..., fallback=[...])`.
-    That shape cannot express carrier-day pinning, because it holds no state, so it
-    would fragment manifests on every failover. The `Router` type replaces it.
-
-### Carrier-first
-
-Once the router exists, a carrier-direct adapter is just an `Adapter` that returns
-one carrier's rates — the interface already accommodates it. First step is a
-**USPS-direct, rating-only** adapter: it proves the seam survives carrier-first and
-surfaces the credential, manifest and postage-payment shape early, without
-committing to a purchase path.
-
----
-
-## The manifest problem, and a reversed decision
-
-A manifest (USPS SCAN form, FedEx close-out, UPS end-of-day) groups labels bought
-on **one account** into one physical handoff. Route 100 labels across three sources
-and you hand the driver three manifests.
-
-This creates a real tension, and the two goals want different answers:
-
-| Goal | Frequency | Manifest cost |
-|---|---|---|
-| Failover during an outage | episodic | one extra manifest, occasionally — acceptable |
-| Cheapest-rate arbitrage | every label | continuous fragmentation — not acceptable |
-
-So the router's unit of decision is a **manifest group** (carrier × account × day),
-not a label. Pin a primary source per carrier per day; deviate only on outage.
-
-!!! warning "This reverses a previous 'not planned'"
-    An earlier roadmap listed manifests under *not planned*, on the grounds that
-    they pulled a previous attempt at this library out of shape. That still holds
-    for **manifest generation**, which remains out of scope. But **manifest-group
-    awareness** is now a routing prerequisite: a router that ignores it produces an
-    operational problem worse than the downtime it solves. Awareness in, generation
-    out.
+You state the policy; shipzil executes it. Anything where shipzil chooses for you
+is a later and separate concern.
 
 ---
 
 ## Later
 
-- Rate shopping across providers in one call — **blocked on A1**, and on
-  accessorial equivalence. "Cheapest" is only meaningful if the services are
-  genuinely comparable, and equivalence is subtle: requesting DDP on EasyPost drops
-  the rate list from 18 to 14 because four services will not carry it. A naive
-  cheapest-wins router can silently select a rate that cannot carry the shipment's
-  requirements.
+- **Intelligent routing** — selection informed by provider health and outcome, as
+  opposed to the declarative fallback above. Design in progress, and it depends on
+  addressing and the catalog landing first.
+- **Carrier-direct adapters**, starting with a USPS rating-only adapter. The
+  `Adapter` interface already accommodates a provider that returns one carrier.
 - Tracking, and webhook payload normalisation
+- Cost aggregation and per-provider observability
 - `tax_identifiers` — VAT, EORI, IOSS. Effectively mandatory for commercial EU
   traffic and currently the largest customs gap.
-- USPS six-digit HS code enforcement in `customs_gap`, required on every item since
-  1 September 2025
+- USPS six-digit HS code enforcement, required on every item since 1 Sept 2025
 - Third-party duty billing — EasyPost `options.duty_payment`, ShipStation
   `canada_delivered_duty`
 - Wider incoterms: `FCA`, `DAP`, `eDAP`
 - An async client, if there is real demand
+
+### On cross-provider rate comparison
+
+Frequently requested, and deliberately not promised yet. Comparing prices requires
+knowing that two services are interchangeable, and equivalence is subtle: requesting
+DDP on EasyPost drops the rate list from 18 to 14 because four services will not
+carry it. A comparison that ignores that silently selects a rate which cannot carry
+the shipment. Addressing comes first, equivalence after, and only then price.
+
+There is also an operational constraint worth stating plainly: labels are grouped
+into carrier manifests by account, so spreading a day's labels across providers
+multiplies the manifests a warehouse has to hand over. Any routing shipzil offers
+has to respect that, which rules out naive per-label price shopping.
+
+---
+
+## Commitments
+
+Two, because they affect whether shipzil is worth trusting rather than what it can
+do.
+
+**Neutrality.** shipzil will not let commercial relationships shape provider
+ordering. There is no built-in default preference; ordering is yours to configure,
+and that will remain enforced by a test rather than by good intentions.
+
+**Verification, stated honestly.** Every claim in these docs is marked as measured,
+read from a specification, secondary research, or unverified. See
+[why that section exists](research.md).
 
 ---
 
@@ -185,7 +162,8 @@ So you can rule shipzil out quickly:
 
 - **Address validation** — use your provider's
 - **Insurance** — likewise
-- **Manifest *generation*** — awareness only, see above
+- **Manifest generation** — shipzil will respect manifest grouping when routing, but
+  it will not produce SCAN forms or close-outs
 - **Batch and returns**
 
 Each of these pulled a previous attempt at this library out of shape. If it is not

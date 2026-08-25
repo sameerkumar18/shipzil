@@ -46,6 +46,7 @@ from ..models import (
     TrackingLeg,
 )
 from ..normalize import code_from_text
+from ..service_id import ServiceId
 from .base import Adapter, Capabilities
 
 PRODUCTION_BASE = "https://public-api.easyship.com"
@@ -222,6 +223,13 @@ class EasyshipAdapter(Adapter):
         return Rate(
             carrier=str(carrier),
             service=str(service.get("name") or data.get("full_description") or ""),
+            service_id=ServiceId.build(
+                provider=self.name,
+                # Easyship names services like "FedEx 2Day®", so the carrier is
+                # recovered from the service text when this field is empty.
+                carrier=str(carrier),
+                service=str(service.get("name") or ""),
+            ),
             amount=Decimal(str(data.get("total_charge") or 0)),
             currency=currency.upper() if isinstance(currency, str) else None,
             delivery_days=int(days) if days is not None else None,

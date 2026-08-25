@@ -48,6 +48,7 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_text
+from ..service_id import ServiceId
 from .base import Adapter, Capabilities
 
 BASE = "https://ssapi.shipstation.com"
@@ -330,9 +331,23 @@ class ShipStationV1Adapter(Adapter):
         """
         shipment_cost = Decimal(str(data.get("shipmentCost") or 0))
         other_cost = Decimal(str(data.get("otherCost") or 0))
+        service_name = str(data.get("serviceName") or data.get("serviceCode") or "")
+        # v1 encodes packaging into the service name — "USPS Ground Advantage -
+        # Package" and "USPS Ground Advantage - Thick Envelope" are two rates at
+        # two prices sharing one serviceCode. Split so packaging becomes its own
+        # component of the address; without it the two collide onto one slug.
+        base_service, _, packaging = service_name.partition(" - ")
         return Rate(
             carrier=carrier_code,
-            service=str(data.get("serviceName") or data.get("serviceCode") or ""),
+            service=service_name,
+            service_id=ServiceId.build(
+                provider=self.name,
+                # carrier_code is the reseller here: USPS rates arrive as
+                # "stamps_com", which normalises back to usps.
+                carrier=carrier_code,
+                service=base_service,
+                packaging=packaging or None,
+            ),
             amount=shipment_cost + other_cost,
             # v1 sends no currency and no delivery estimate. Assuming USD would
             # be an invention, so both stay None.

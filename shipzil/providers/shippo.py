@@ -37,6 +37,7 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_text
+from ..service_id import ServiceId
 from .base import Adapter, Capabilities
 
 BASE = "https://api.goshippo.com"
@@ -257,6 +258,13 @@ class ShippoAdapter(Adapter):
         return Rate(
             carrier=str(data.get("provider") or ""),
             service=str(service.get("name") or service.get("token") or ""),
+            service_id=ServiceId.build(
+                provider=self.name,
+                carrier=str(data.get("provider") or ""),
+                # Prefer the token: it is stabler than the display name, which
+                # Shippo truncates ("First Class Package International Serv").
+                service=str(service.get("token") or service.get("name") or ""),
+            ),
             amount=Decimal(str(data.get("amount") or 0)),
             currency=currency.upper() if isinstance(currency, str) else None,
             delivery_days=int(days) if days is not None else None,

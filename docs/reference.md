@@ -103,7 +103,8 @@ A customs line. **`weight` and `value` are per unit**; `quantity` multiplies the
 
 | Field | Notes |
 |---|---|
-| `carrier`, `service` | the **provider's** spelling, not canonical across providers |
+| `service_id` | `ServiceId \| None` — the stable address, `{provider}-{carrier}-{service}` |
+| `carrier`, `service` | the **provider's** spelling, unnormalised |
 | `amount`, `currency` | `currency` may be `None` on ShipStation v1 |
 | `base_amount`, `surcharges` | where the provider itemises |
 | `delivery_days`, `guaranteed` | `None` where not offered |
@@ -131,6 +132,32 @@ A customs line. **`weight` and `value` are per unit**; `quantity` multiplies the
 | `message` | human text |
 | `carrier`, `service` | where the provider says |
 | `source` | `"shipzil"` if raised locally, else the provider |
+
+### `ServiceId`
+
+The stable, addressable identity for one provider's one service.
+
+| Field / property | Notes |
+|---|---|
+| `provider` | `easypost`, `shippo`, `shipstation_v1`, … |
+| `carrier` | **normalised**: `UPSDAP` → `ups`, `stamps_com` → `usps` |
+| `service` | the provider's own spelling, slugified — **not** normalised |
+| `packaging` | set only where the provider prices packaging separately |
+| `.slug` | `"easypost-usps-groundadvantage"` — display and wire form |
+| `.unqualified` | `"usps-groundadvantage"` — grouping only, **not** an equivalence claim |
+
+Provider-namespaced on purpose: two providers offering what looks like the same
+service get two addresses, because asserting they substitute for one another is a
+claim with a much higher correctness bar. Store the parts, not the slug — a later
+layer needs `carrier` and `service` without parsing a string apart.
+
+```python
+from shipzil.service_id import normalize_carrier, carrier_from_service
+
+normalize_carrier("UPSDAP")                        # "ups"
+normalize_carrier("stamps_com")                    # "usps"
+carrier_from_service("USPS Ground Advantage - Package")   # "usps"
+```
 
 ## Units
 
