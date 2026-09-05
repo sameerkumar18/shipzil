@@ -12,7 +12,7 @@ Bring your own provider accounts. Keep your contracts and negotiated rates.
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%20–%203.14-4338ca?style=flat-square)](https://www.python.org/downloads/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-06b6d4?style=flat-square)](#install)
-[![Status](https://img.shields.io/badge/status-private%20pre--release-f59e0b?style=flat-square)](#install)
+[![Status](https://img.shields.io/badge/status-alpha%2C%20untagged-f59e0b?style=flat-square)](#install)
 
 </div>
 
@@ -182,22 +182,28 @@ See [Concepts](https://sameerkumar18.github.io/shipzil/docs/concepts/) and
 
 ## Install
 
-> **Private pre-release.** The code exists only in this unreleased working tree.
-> There is no public tag or package yet, so the git commands below do not work.
+> **Alpha, and not yet tagged.** No release tag or PyPI package exists, so pin a
+> commit rather than a version. The API can still change.
 
-From this checkout:
+Pin an exact commit:
 
 ```bash
+uv add "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
+pip install "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
+```
+
+Or work from a clone:
+
+```bash
+git clone https://github.com/sameerkumar18/shipzil.git
+cd shipzil
 uv sync
 uv run python examples/gateway.py
 ```
 
-Once the repository is public and a tag exists:
-
-```bash
-uv add "shipzil @ git+https://github.com/sameerkumar18/shipzil@<tag>"
-pip install "shipzil @ git+https://github.com/sameerkumar18/shipzil@<tag>"
-```
+`uv add "shipzil @ git+...@<tag>"` will work once the first tag is published. A git
+dependency cannot be used by a package you publish to PyPI; that needs shipzil on
+PyPI, which is on the [roadmap](https://sameerkumar18.github.io/shipzil/docs/roadmap/).
 
 ## Development
 

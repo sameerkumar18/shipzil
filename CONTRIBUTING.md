@@ -104,8 +104,12 @@ in CI.
 
 ## Maintainer release process
 
-A git install resolves a commit, not the working tree. The first public tag must be
-created only after the work is committed and the repository is public.
+A git install resolves a commit, not the working tree, so a tag must exist before
+anyone can install that state by version.
+
+Before pushing the first `v*` tag, configure a PyPI trusted publisher for this
+repository. The release workflow triggers on `v*` and will fail at the publish step
+without it.
 
 The package version is read from `shipzil/__init__.py`. The release workflow rejects
 a tag that does not match it.

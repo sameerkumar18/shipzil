@@ -11,9 +11,9 @@ There is no hosted shipzil service or per-label fee.
 The phrase describes the product category; shipzil is not affiliated with
 OpenRouter.
 
-!!! warning "Private pre-release"
-    The current working tree has no public repository tag or package. The
-    interface may change before the first release.
+!!! warning "Alpha, and not yet tagged"
+    No release tag or PyPI package exists yet, so pin a commit rather than a
+    version. The interface may change before the first release.
 
 ## Start here
 
@@ -75,8 +75,11 @@ make check
 make docs
 ```
 
-Public git-install commands will be added after a public tag exists. The current
-repository is private, so `git+https://...@<tag>` does not work today.
+Until the first tag exists, pin an exact commit:
+
+```bash
+uv add "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
+```
 
 ## Documentation
 

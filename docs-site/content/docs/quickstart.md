@@ -3,8 +3,7 @@ title: Quickstart
 description: Configure sources, request rates and buy a label.
 ---
 
-This page uses the unreleased development checkout. There is no public tag or
-package yet.
+No release tag or PyPI package exists yet, so pin a commit or work from a clone.
 
 ```bash
 uv sync
