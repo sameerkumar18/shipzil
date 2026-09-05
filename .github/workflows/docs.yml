@@ -25,13 +25,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
       - run: npm ci
@@ -42,15 +42,17 @@ jobs:
         working-directory: docs-site
       - run: npm run check:agent
         working-directory: docs-site
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/main'
         with:
           path: docs-site/out
 
-  # Deploy only from main. Requires Pages enabled with source "GitHub Actions".
-  # Note: Pages on a private repository needs a paid plan.
+  # Deploy only from main, and only once Pages is actually enabled. Pages on a
+  # private repository needs a paid plan, and deploy-pages returns 404 until the
+  # source is set to "GitHub Actions", which would fail every push.
+  # Enable with: gh variable set PAGES_ENABLED --body true
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.PAGES_ENABLED == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -61,4 +63,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
