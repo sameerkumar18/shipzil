@@ -4,34 +4,48 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/**"
-      - "mkdocs.yml"
+      - "docs-site/**"
+      - "shipzil/**"
+      - "AGENTS.md"
       - "pyproject.toml"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
-      - "docs/**"
-      - "mkdocs.yml"
+      - "docs-site/**"
+      - "shipzil/**"
+      - "AGENTS.md"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  # Always build, on every branch and PR. mkdocs runs with strict: true, so a
-  # broken internal link fails here rather than shipping.
+  # Always build, on every branch and PR. Type generation, static generation and
+  # the agent-output checks all run before anything can be deployed.
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv run --group docs mkdocs build --strict
+      - run: npm ci
+        working-directory: docs-site
+      - run: npm run types:check
+        working-directory: docs-site
+      - run: npm run build
+        working-directory: docs-site
+      - run: npm run check:agent
+        working-directory: docs-site
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:
-          path: site
+          path: docs-site/out
 
   # Deploy only from main. Requires Pages enabled with source "GitHub Actions".
   # Note: Pages on a private repository needs a paid plan.

@@ -1,0 +1,76 @@
+name: release
+
+# Publishes to PyPI when a version tag is pushed.
+#
+# Uses PyPI Trusted Publishing (OIDC), so there is no API token in this repository.
+# One-time setup on PyPI: add a trusted publisher for this repo with workflow
+# name "release" and environment "pypi".
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Never publish something that does not pass its own suite.
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv run --python ${{ matrix.python-version }} --isolated --with pytest pytest -m "not live"
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Fail if the tag does not match the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv run python -c 'import shipzil; print(shipzil.__version__)')"
+          echo "tag=$tag package=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $tag does not match shipzil.__version__ $pkg"
+            exit 1
+          fi
+        if: github.event_name == 'push'
+
+      - run: uv build
+
+      - name: Check the wheel ships what it must
+        run: |
+          uv run --with twine twine check dist/*
+          python -m zipfile -l dist/*.whl > contents.txt
+          for required in shipzil/gateway.py shipzil/services.py shipzil/py.typed; do
+            grep -q "$required" contents.txt || {
+              echo "::error::wheel is missing $required"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # required for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

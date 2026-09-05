@@ -1,161 +1,111 @@
 # Contributing
 
-## Adding a provider
+## Development setup
 
-You write one file. Nothing in `shipzil/` needs to change.
+```bash
+uv sync
+make check
+```
 
-This is verified, not aspirational: an adapter defined entirely outside the
-package gets rating, multi-parcel fan-out, exclusion de-duplication, `max_spend`,
-`dry_run`, and the refusal to buy a synthesized rate, purely by implementing two
-methods.
+Useful commands:
+
+```bash
+make test           # offline tests only
+make test-live      # loads .env and calls real providers
+make check-compat   # offline tests on Python 3.10 through 3.14
+make docs           # local docs server
+make docs-build     # types, static docs and agent outputs
+```
+
+Do not run `uv run pytest -m live` expecting `.env` to load automatically. Use
+`make test-live` or pass `--env-file .env` explicitly.
+
+## Adding an adapter
 
 ```python
-from shipzil.models import Exclusion, ExclusionCode, Label, Quote, Rate, Shipment, Strategy
-from shipzil.providers import Adapter, Capabilities
-
-
-class AcmeCapabilities(Capabilities):
-    native_multi_parcel = False        # shipzil will fan out for you
-    returns_currency = True
-    returns_delivery_estimate = False  # say so; do not invent one
+from shipzil.models import Label, Rate, Shipment
+from shipzil.providers import Adapter, Capabilities, Quote
 
 
 class AcmeAdapter(Adapter):
     name = "acme"
-    capabilities = AcmeCapabilities()
+    capabilities = Capabilities(
+        native_multi_parcel=False,
+        returns_currency=True,
+        returns_delivery_estimate=False,
+    )
 
     def __init__(self, api_key: str) -> None:
         self.api_key = api_key
 
-    def is_test_mode(self) -> bool | None:
-        return self.api_key.startswith("test_")   # None if you cannot tell
-
     def rate_single(self, shipment: Shipment) -> Quote:
-        ...   # required
+        ...
 
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
-        ...   # required, and must pass retries=0
+        ...
 ```
 
-That is the whole contract. `rate_native_multi` and `void` are optional; the base
-class raises a clear `NotImplementedError` naming your provider if someone calls
-one you did not implement.
+`rate_single()` and `buy()` are required. Implement `rate_native_multi()` and
+`void()` only when supported.
 
-To ship it in-tree, add two lines to `shipzil/providers/__init__.py` (the import
-and `__all__`). For anything out-of-tree, you do not even need that — just
-`Client(YourAdapter(...))`.
-
-### The four rules
-
-1. **Never return an empty `Quote.rates` without populating `Quote.excluded`.**
-   An unexplained absence of rates is the bug this library exists to remove.
-2. **Never invent input.** If the provider needs dimensions, a customs category,
-   or a company name and the caller did not supply it, raise or exclude with a
-   message naming the missing field. Do not substitute something plausible.
-3. **Mark inferences.** `Exclusion(source="provider")` means the provider said
-   it. `source="shipzil"` means you concluded it. Never blur the two.
-4. **Never retry a purchase.** Pass `retries=0` on any request that spends money.
-   A test walks the AST of every adapter to enforce this, so it cannot be
-   forgotten by moving code into a helper.
-
-### The two places you may have to touch shared code
-
-Everything else is genuinely decoupled — no core module branches on a provider
-name. These two are honest exceptions:
-
-- **`ExclusionCode` in `models.py`** is a closed enum of 8 members. If your
-  provider fails in a way none of them describes, add one. It is a `str` enum and
-  dataclasses do not validate, so a bare string works at runtime for
-  experimentation, but it will not type-check and should not be merged.
-- **`normalize.py`** holds the central prose-to-code maps (`_PROVIDER_CODES` for
-  machine-readable codes, `_PATTERNS` for error text). If your provider reports
-  failures as prose, add patterns there rather than parsing text in your adapter.
-
-## Verifying against a provider
-
-The most valuable thing you can contribute is evidence.
-
-**Prefer captured real responses over hand-written fixtures.** A fixture written
-by hand encodes the same assumption as the parser it checks, so it cannot catch a
-wrong field name. Put captured responses in `tests/fixtures/`, scrubbed of
-contact details and credentials, structure untouched. Scrub on **exact key
-names** — a substring match on `state` will silently redact `label_state`.
-
-**Read the schema, not the prose.** Every hallucinated field in this library's
-history came from trusting documentation prose. Easyship's own docs say to
-"assign a courier using `courier_service_id`"; the actual `ShipmentCreate` schema
-rejects it at the top level, because it is nested inside `courier_settings`.
-
-**Know that a captured fixture only tests what its data exercises.** Every
-`otherCost` in the ShipStation v1 sample is `0.0`, so that fixture cannot tell
-`shipmentCost + otherCost` from `shipmentCost` alone. That arithmetic needs a
-constructed case, and it is marked as such.
-
-**Check your test has teeth.** Reintroduce the bug and watch the test fail. Two
-tests in this repo looked protective and were not until that was done.
-
-## Toolchain
-
-```bash
-uv sync                          # dev toolchain, pinned by uv.lock
-uv run pytest -m "not live"      # offline
-uv run pytest -m live            # needs credentials in .env
-uv run ruff check shipzil tests
-uv run mypy shipzil
-```
-
-Compatibility across the supported range:
-
-```bash
-for v in 3.9 3.10 3.11 3.12 3.13 3.14; do
-  uv run --python $v --isolated --with pytest pytest
-done
-```
-
-The library targets 3.9+; the dev tools do not (mypy and pytest 9 both dropped
-it), which is why the dev group uses environment markers and mypy is configured
-at 3.10 while ruff lints at `py39`. A real 3.9 test run is what actually guards
-the floor.
-
-## Live tests
-
-Live tests refuse to run against a production key, and that guard is read as a
-property:
+An out-of-tree adapter is configured through the Gateway:
 
 ```python
-assert adapter.is_test_key, "refusing to run live tests against a production key"
+gateway = shipzil.Gateway({"acme": AcmeAdapter(api_key)})
 ```
 
-If that ever becomes a method, the expression evaluates a bound method, which is
-always truthy, and the guard silently always passes. There is a test asserting
-both credential checks return `bool`. Do not remove it.
+An in-tree adapter also needs an export and registry entry in
+`shipzil/providers/__init__.py`.
 
-Where a provider offers a no-charge purchase path, use it and default to it:
-ShipStation v1 has `testLabel: true`, and the adapter defaults it on because the
-only v1 credentials that exist in practice are production.
+## Adapter rules
 
-## Hazmat, and capability honesty
+1. Populate `Quote.excluded` when the provider returns no rates and supplies a
+   reason. Do not claim reasons for services the provider silently omitted.
+2. Do not fabricate dimensions, contents, customs values, categories or company
+   names. Return an exclusion or validation error naming the missing input.
+3. Use `Exclusion(source="provider")` for provider output and `source="shipzil"`
+   for local validation or filtering.
+4. Set `Rate.provider`, `Rate.service_key` and provider purchase tokens.
+5. Pass `retries=0` on purchase, cancel and refund requests.
+6. Add only dangerous-goods fields the adapter sends on the wire to
+   `hazmat_fields`.
 
-If you add a provider that carries hazmat, declare exactly what it can take in
-`Adapter.hazmat_fields`, read from its OpenAPI specification rather than its
-prose docs. `Client` calls `hazmat_fidelity_gap()` on every quote, so anything a
-caller declares that your provider cannot carry is reported automatically.
+Shared code changes may be required when a provider introduces a new exclusion
+code or carrier spelling. Add those centrally in `models.py`, `normalize.py` or
+`services.py`; do not branch shared behavior on provider names.
 
-**Claim less rather than more.** An over-claimed field means a hazmat parcel
-ships under-declared and looks like a success, with the liability sitting on the
-shipper. `EasyPostAdapter.hazmat_fields` is deliberately empty because its
-documentation has not been consulted, not because EasyPost lacks support.
+## Evidence and tests
 
-Hazmat changes which rates come back, not only the price: a declared lithium
-battery takes Shippo from 11 rates to 3, all USPS. Never quote without passing
-the declaration through.
+Provider changes need:
 
-## `str.replace` fails silently
+1. A current provider-owned schema or model page for request fields.
+2. A payload test proving the value reaches the outgoing request.
+3. A sanitized provider response for parser tests when available.
+4. A constructed edge case when the captured response cannot exercise the logic.
+5. A live read-only or sandbox call when credentials and provider safety allow.
 
-Several bugs in this repository's history came from an edit whose anchor did not
-match, so the replacement quietly did nothing and the code kept its old
-behaviour. `Rate.surcharges` was "added" twice before anyone noticed the first
-attempt had anchored on a method that lives on `Quote`.
+Sanitize credentials, addresses, emails, phone numbers, tracking ids and label
+bytes. Preserve response shape and enum values needed by the parser. Document any
+synthetic annotations in `tests/fixtures/README.md`.
 
-If you script an edit, assert the anchor exists first. The tests are the real
-safety net, but an assertion turns a silent no-op into an immediate failure.
+Before keeping a regression test, restore the bug temporarily and confirm the test
+fails.
+
+## Live-test safety
+
+- Shippo purchase tests assert that the token starts with `shippo_test_`.
+- ShipStation v2 live tests are rating only.
+- ShipStation v1 has no sandbox. The retained no-charge evidence covers one
+  Stamps.com/USPS `testLabel` response; do not generalize that to every carrier.
+- Easyship sandbox calls consume finite quota.
+
+Review a live marker before running it. Never place production purchase credentials
+in CI.
+
+## Maintainer release process
+
+A git install resolves a commit, not the working tree. The first public tag must be
+created only after the work is committed and the repository is public.
+
+The package version is read from `shipzil/__init__.py`. The release workflow rejects
+a tag that does not match it.
