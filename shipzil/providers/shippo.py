@@ -23,7 +23,6 @@ from decimal import Decimal
 from typing import Any
 
 from ..errors import LabelPurchaseError, ShipzilError
-from ..http import request
 from ..models import (
     Address,
     Exclusion,
@@ -37,22 +36,15 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_text
-from ..service_id import ServiceId
+from ..services import ServiceKey
 from .base import Adapter, Capabilities
 
 BASE = "https://api.goshippo.com"
 
 
-class ShippoCapabilities(Capabilities):
-    # Verified: the array is accepted and rated as nothing. Not a capability.
-    native_multi_parcel = False
-    order_resource = False
-    returns_currency = True
-    returns_delivery_estimate = True
-
-
 class ShippoAdapter(Adapter):
     name = "shippo"
+    eei_style = "token"
     # "Total value of this item, i.e. quantity * value per item" — CustomsItem.
     customs_value_basis = "line_total"
     # extra.dangerous_goods{contains, lithium_batteries, biological_material},
@@ -61,7 +53,13 @@ class ShippoAdapter(Adapter):
     hazmat_fields = frozenset(
         {"lithium_batteries", "biological_material", "dry_ice", "contains_alcohol"}
     )
-    capabilities = ShippoCapabilities()
+    capabilities = Capabilities(
+        # Verified: the parcels array is accepted and rated as nothing, which is
+        # not a capability.
+        native_multi_parcel=False,
+        returns_currency=True,
+        returns_delivery_estimate=True,
+    )
 
     def __init__(self, api_token: str, *, timeout: float = 90.0):
         if not api_token:
@@ -86,7 +84,7 @@ class ShippoAdapter(Adapter):
         if gap is not None:
             return Quote(excluded=(gap,), via=f"{self.name}:shipments")
 
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/shipments/",
             headers=self._headers,
@@ -152,7 +150,7 @@ class ShippoAdapter(Adapter):
                 continue
             seen.add(key)
             out.append(
-                Exclusion(code=code, message=text, carrier=carrier, source="shipzil")
+                Exclusion(code=code, message=text, carrier=carrier, source="provider")
             )
         return out
 
@@ -258,7 +256,7 @@ class ShippoAdapter(Adapter):
         return Rate(
             carrier=str(data.get("provider") or ""),
             service=str(service.get("name") or service.get("token") or ""),
-            service_id=ServiceId.build(
+            service_key=ServiceKey.build(
                 provider=self.name,
                 carrier=str(data.get("provider") or ""),
                 # Prefer the token: it is stabler than the display name, which
@@ -288,7 +286,7 @@ class ShippoAdapter(Adapter):
             raise LabelPurchaseError(
                 "this rate has no shippo object_id and cannot be bought", provider=self.name
             )
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/transactions/",
             headers=self._headers,
@@ -332,7 +330,7 @@ class ShippoAdapter(Adapter):
         """
         if not label.shipment_id:
             return False
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/refunds/",
             headers=self._headers,

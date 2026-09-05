@@ -12,7 +12,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal
 
-from .service_id import ServiceId
+from .services import ServiceKey
 from .units import Dimensions, Weight
 
 __all__ = [
@@ -32,7 +32,7 @@ __all__ = [
     "Quote",
     "Rate",
     "RegulationLevel",
-    "ServiceId",
+    "ServiceKey",
     "Shipment",
     "Strategy",
     "TrackingLeg",
@@ -63,12 +63,9 @@ class AddressClass(str, Enum):
 class DutiesPaidBy(str, Enum):
     """Who settles import duty and tax. An incoterm, narrowed to the choice.
 
-    shipzil used to hardcode DDU, which silently made the *recipient* liable for
-    duty on every international shipment. That is a commercial decision and it
-    belongs to the caller.
-
-    `UNSPECIFIED` sends nothing and lets the provider apply its own default,
-    which is the only honest behaviour when the caller has not said.
+    Who bears import duty is a commercial decision, so shipzil never picks one.
+    `UNSPECIFIED` sends nothing and lets the provider apply its own account
+    default, which is the only honest behaviour when the caller has not said.
     """
 
     UNSPECIFIED = "unspecified"
@@ -167,12 +164,11 @@ class DangerousGoods:
     emergency_contact_phone: str | None = None
 
     @property
-    def is_fully_declared(self) -> bool:
-        """Whether the regulated fields a fully-regulated shipment needs are set.
+    def has_core_regulated_fields(self) -> bool:
+        """Whether UN number, hazard class and packing group are present.
 
-        Deliberately not enforced: plenty of hazmat ships under limited or
-        excepted quantity with far less paperwork. It exists so an adapter can
-        warn instead of guessing.
+        This is not a compliance check. The required fields depend on the material,
+        quantity, transport mode and governing authority.
         """
         return bool(self.un_number and self.hazard_class and self.packing_group)
 
@@ -215,8 +211,7 @@ class TrackingLeg:
     4. **Aliases.** DHL eCommerce adds `local` and `alternate` numbers for the
        same package.
 
-    Collapsing these to a single string, which shipzil did, loses every leg after
-    the first.
+    A single string would lose every leg after the first.
     """
 
     tracking_number: str
@@ -236,19 +231,11 @@ class CustomsLine:
     """One line of a customs declaration, carrying **both** bases.
 
     Providers disagree about whether a customs line's value and weight mean the
-    per-unit figure or the line total, and the disagreement is not guessable —
-    it splits two against two among the four providers whose documentation says
-    either way. So this holds both and each adapter takes the one its provider
-    documents, declared as `Adapter.customs_value_basis`.
+    per-unit figure or the line total, and the disagreement is not guessable. So
+    this holds both, and each adapter takes the one its own documentation states
+    via `Adapter.customs_value_basis`. Each adapter cites its source at the field.
 
-    | Provider | Basis | Documented as |
-    |---|---|---|
-    | Shippo | line total | "Total value of this item, i.e. quantity * value per item" |
-    | ShipStation v1 | line total | "The value (in USD) of the line item" |
-    | ShipEngine / v2 | **per unit** | "The declared value of *each* item" |
-    | Easyship | **per unit** | "this value refers to the unit rather than the total" |
-
-    Getting it backwards is not a formatting error. Sending a line total where a
+    Getting it backwards is not a formatting error: sending a line total where a
     unit is expected multiplies the declared customs value by the quantity, which
     inflates duty and misstates the shipment to the destination authority.
     """
@@ -313,8 +300,8 @@ class Item:
     """Contents of a parcel.
 
     Optional for domestic shipping on most providers, but **Easyship requires
-    either `category` or `hs_code` on every item even for a domestic US
-    shipment** — see docs/API-REALITY.md.
+    either `category` or `hs_code` on every item, even for a domestic US
+    shipment**.
 
     `dimensions` is per item rather than per box, which is how Easyship derives a
     box when none is given: it rejects item-only parcels whose items carry no
@@ -363,8 +350,8 @@ class Parcel:
 
     Two ways to describe it:
 
-    * **box-centric** — `weight` plus optional `dimensions`. What EasyPost,
-      Shippo and ShipStation expect.
+    * **box-centric** — `weight` plus optional `dimensions`. What most provider
+      surfaces expect.
     * **item-centric** — `items` only, letting the provider pack and weigh.
       Only Easyship can do this; adapters that cannot will say so rather than
       inventing a bounding box.
@@ -460,6 +447,8 @@ class Shipment:
         """
         if self.eei_exemption:
             return self.eei_exemption
+        if self.from_address.country != "US":
+            return None
         if not self.parcels or not any(p.items for p in self.parcels):
             return None
         return "NOEEI_30_37_a" if self.declared_value <= Decimal(2500) else None
@@ -492,15 +481,13 @@ class Strategy(str, Enum):
     NATIVE = "native"
     """Provider rated the whole shipment in one call."""
 
-    ORDER = "order"
-    """Provider has a distinct multi-parcel resource (EasyPost /orders)."""
-
     FANOUT = "fanout"
     """shipzil rated each parcel separately and combined the results.
 
-    Used where the provider cannot rate multiple parcels at all — four of six
-    surfaces. The amounts are a **sum of per-parcel quotes**, which is not
-    always what a carrier would charge for one consignment.
+    Used where the provider cannot rate multiple parcels at all, which is three
+    of the four supported surfaces. The amounts are a **sum of per-parcel
+    quotes**, which is not always what a carrier would charge for one
+    consignment.
     """
 
 
@@ -522,16 +509,24 @@ class ExclusionCode(str, Enum):
     DUTIES_UNSUPPORTED = "duties_unsupported"
     HAZMAT_DETAIL_UNSUPPORTED = "hazmat_detail_unsupported"
     RATE_LIMITED = "rate_limited"
+    #: The caller's own provider/carrier/service filter removed this rate. Always
+    #: reported rather than dropped: a filter that silently discards a rate is
+    #: indistinguishable from a provider that never offered it.
+    FILTERED_BY_REQUEST = "filtered_by_request"
+    #: The provider returned a rate shipzil could not turn into a `ServiceKey`,
+    #: usually because no carrier was resolvable from either the carrier field or
+    #: the service text. Such a rate cannot be matched against a filter, so it is
+    #: reported instead of being quietly excluded.
+    SERVICE_NOT_ADDRESSABLE = "service_not_addressable"
     UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
 class Exclusion:
-    """Something that could not be rated, and why.
+    """A local or provider-reported reason a rate was unavailable.
 
-    The point of the library: an empty rate list is never returned without
-    reasons attached. `source` records whether the provider told us in
-    structured form, or whether we inferred the code from prose.
+    `source` records where the failure originated. The normalized code may still
+    be inferred from provider prose.
     """
 
     code: ExclusionCode
@@ -541,36 +536,50 @@ class Exclusion:
     source: Literal["provider", "shipzil"] = "provider"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Rate:
     """A price for carrying a shipment.
+
+    Keyword-only. Seventeen fields is too many to order positionally, and a
+    keyword-only constructor means a new field can be added anywhere without
+    changing the meaning of an existing call.
 
     `currency` and `delivery_days` are optional because **ShipStation v1 returns
     neither** — it gives four fields total. Code that requires them must degrade
     rather than crash.
     """
 
+    # ── identity ────────────────────────────────────────────────────
     carrier: str
     service: str
-    amount: Decimal
-    currency: str | None = None
-    delivery_days: int | None = None
-    guaranteed: bool | None = None
     provider: str = ""
     service_code: str | None = None
-    strategy: Strategy = Strategy.NATIVE
-    parcel_count: int = 1
+    #: Stable gateway address, `{provider}-{carrier}-{service}`. None when the
+    #: provider returned a rate shipzil could not address; such a rate is reported
+    #: as `ExclusionCode.SERVICE_NOT_ADDRESSABLE` rather than dropped.
+    service_key: ServiceKey | None = None
+    #: Configured source/account that produced this rate, when a Gateway made it.
+    source: str | None = None
+
+    # ── price ───────────────────────────────────────────────────────
+    amount: Decimal
+    currency: str | None = None
     #: Base carriage before surcharges, when the provider separates it. Easyship
-    #: returns 25 cost components and shipzil previously kept only the total, so
-    #: a 13% gap between carriage and total was invisible.
+    #: returns 25 cost components; keeping only the total hides a double-digit
+    #: percentage gap between carriage and total.
     base_amount: Decimal | None = None
     #: Named surcharge components in the provider's own spelling, e.g.
     #: ("fuel_surcharge", 3.03). Their sum need not equal amount - base_amount;
     #: no provider guarantees that, so shipzil does not assert it.
     surcharges: tuple[tuple[str, Decimal], ...] = ()
-    #: Stable gateway address, `{provider}-{carrier}-{service}`. `None` when the
-    #: provider gave nothing identifiable to address. See `shipzil.service_id`.
-    service_id: ServiceId | None = None
+
+    # ── service level ───────────────────────────────────────────────
+    delivery_days: int | None = None
+    guaranteed: bool | None = None
+
+    # ── provenance ──────────────────────────────────────────────────
+    strategy: Strategy = Strategy.NATIVE
+    parcel_count: int = 1
     raw: Any = None
 
     @property
@@ -615,7 +624,7 @@ class Quote:
         return "\n".join(lines)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Label:
     """A purchased label.
 
@@ -629,6 +638,8 @@ class Label:
 
     tracking_number: str
     label_url: str
+    #: Base64 label content when a provider returns bytes instead of a URL.
+    label_data: str | None = None
     carrier: str
     service: str
     amount: Decimal
@@ -641,8 +652,8 @@ class Label:
     #: first leg; this is the whole set, including later legs after a courier
     #: handoff and per-piece numbers in a multi-piece shipment.
     tracking_legs: tuple[TrackingLeg, ...] = ()
-    #: One entry per parcel when a single purchase produced several labels.
-    #: EasyPost's `POST /orders/{id}/buy` is the case that needs it: it returns
-    #: a `shipments` array, each with its own postage label and tracking code.
+    #: Reserved for per-parcel output; current adapters do not populate it.
     parcel_labels: tuple[Label, ...] = ()
     raw: Any = None
+    #: Configured source/account that bought this label, when a Gateway bought it.
+    source: str | None = None

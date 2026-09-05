@@ -1,11 +1,10 @@
-"""shipzil — one honest shipping interface.
+"""MIT-licensed multi-provider shipping library for Python.
 
-Multi-parcel everywhere, including the four provider surfaces out of six that
+Multi-parcel everywhere, including the three provider surfaces of four that
 cannot do it themselves. When a number is synthesized rather than quoted, or a
 carrier is excluded rather than simply absent, the library says so.
 """
 
-from .client import Client
 from .errors import (
     AmbiguousPurchaseError,
     AuthenticationError,
@@ -18,6 +17,7 @@ from .errors import (
     SpendLimitExceeded,
     ValidationError,
 )
+from .gateway import Gateway, GatewayQuote, SourceResult
 from .models import (
     Address,
     AddressClass,
@@ -31,14 +31,14 @@ from .models import (
     LithiumBatteryPacking,
     PackagingTemplate,
     Parcel,
-    Quote,
     Rate,
     RegulationLevel,
-    ServiceId,
+    ServiceKey,
     Shipment,
     Strategy,
     TrackingLeg,
 )
+from .services import ServiceMap
 from .units import Dimensions, Weight
 
 __version__ = "0.1.0"
@@ -49,7 +49,6 @@ __all__ = [
     "AmbiguousPurchaseError",
     "AuthenticationError",
     "CapabilityError",
-    "Client",
     "ConfigurationError",
     "DangerousGoods",
     "Dimensions",
@@ -57,6 +56,8 @@ __all__ = [
     "DutiesPaidBy",
     "Exclusion",
     "ExclusionCode",
+    "Gateway",
+    "GatewayQuote",
     "Item",
     "Label",
     "LabelPurchaseError",
@@ -64,13 +65,14 @@ __all__ = [
     "PackagingTemplate",
     "Parcel",
     "ProviderError",
-    "Quote",
     "Rate",
     "RateLimitError",
     "RegulationLevel",
-    "ServiceId",
+    "ServiceKey",
+    "ServiceMap",
     "Shipment",
     "ShipzilError",
+    "SourceResult",
     "SpendLimitExceeded",
     "Strategy",
     "TrackingLeg",

@@ -1,7 +1,6 @@
 """Adapter contract.
 
-An adapter's job is to make one provider look like the shipzil model, and to be
-honest about what it cannot do. Two rules matter:
+An adapter translates between one provider and the shipzil model. Two rules apply:
 
 * Never return an empty rate list without populating `Quote.excluded`. An
   unexplained absence of rates is the bug this library exists to fix.
@@ -12,8 +11,10 @@ honest about what it cannot do. Two rules matter:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Any
 
+from ..http import Transport, request
 from ..models import (
     CustomsLine,
     DutiesPaidBy,
@@ -28,7 +29,6 @@ from ..models import (
 )
 from ..units import Weight
 
-#: EasyPost writes the same citations in prose form.
 _EEI_PROSE = {
     "NOEEI_30_37_a": "NOEEI 30.37(a)",
     "NOEEI_30_37_f": "NOEEI 30.37(f)",
@@ -40,19 +40,17 @@ _EEI_PROSE = {
 __all__ = ["Adapter", "Capabilities"]
 
 
+@dataclass(frozen=True)
 class Capabilities:
     """What a provider surface can actually do.
 
     Deliberately small: a flag nothing reads is documentation wearing a type.
-    Dimension and classification requirements are enforced in each adapter's
-    own pre-flight check, which is the single source of truth for them, and
-    described in docs/API-REALITY.md.
+    Dimension and classification requirements are enforced in each adapter's own
+    pre-flight check, which is the single source of truth for them.
     """
 
     #: Rates several parcels in one call.
     native_multi_parcel: bool = False
-    #: Has a distinct resource for multi-parcel (EasyPost /orders).
-    order_resource: bool = False
     #: Populates Rate.currency.
     returns_currency: bool = True
     #: Populates Rate.delivery_days.
@@ -61,15 +59,33 @@ class Capabilities:
     @property
     def emulates_multi_parcel(self) -> bool:
         """True when multi-parcel has to be faked by fanning out."""
-        return not (self.native_multi_parcel or self.order_resource)
+        return not self.native_multi_parcel
 
 
 class Adapter(ABC):
     """One provider surface."""
 
-    #: Stable identifier, e.g. "easypost", "shipstation_v2".
+    #: Stable identifier, e.g. "shippo", "shipstation_v2".
     name: str = ""
     capabilities: Capabilities = Capabilities()
+    #: Byte-level HTTP. None uses the shared default. Set it to add logging,
+    #: tracing, a proxy, connection pooling, or to replay recorded traffic.
+    transport: Transport | None = None
+
+    def http(
+        self,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> tuple[int, Any]:
+        """Make a request through this adapter's transport.
+
+        Every adapter goes through here rather than calling `http.request` directly,
+        so a caller-supplied transport cannot be forgotten at one call site — which
+        would silently bypass their logging, proxy or recorded cassette.
+        """
+        kwargs.setdefault("provider", self.name)
+        return request(method, url, transport=self.transport, **kwargs)
 
 
     @abstractmethod
@@ -96,10 +112,10 @@ class Adapter(ABC):
     hazmat_fields: frozenset[str] = frozenset()
 
     #: How this provider spells the EEI exemption. The same regulation is
-    #: written differently per provider: EasyPost wants "NOEEI 30.37(a)" with
-    #: spaces and parentheses, Shippo wants the enum token "NOEEI_30_37_a".
+    #: written differently per provider: some want prose, others want the enum
+    #: token "NOEEI_30_37_a".
     #: shipzil holds the token form and each adapter renders it.
-    eei_style: str = "token"
+    eei_style: str | None = None
 
     #: How this provider spells DDP/DDU, or None when shipzil does not express
     #: duty liability here at all. Same reasoning as `eei_style`: one concept,
@@ -110,22 +126,14 @@ class Adapter(ABC):
     #: daf deq des`), so lowercase is what shipzil sends. Note their own example
     #: request uses `"DDP"`, so the field may well be case-insensitive; shipzil
     #: has no ShipStation credentials and has never tested that.
-    #: `"ddp_only"` -> `DDP` or nothing. EasyPost's `options.incoterm` enum has
-    #: no DDU at all (`CFR CIF CIP CPT DAT DAP DDP EXW FAS FCA FOB`), and its
-    #: docs say "anything other than 'DDP' will pass the cost and responsibility
-    #: of duties on to the recipient". So DDP is the only value worth sending and
-    #: recipient-pays is expressed by omitting the field, which is also every
-    #: carrier's default. Sending an arbitrary non-DDP term instead would change
-    #: the delivery terms as a side effect of a duty choice.
     #: `None` -> the caller's `duties_paid_by` cannot be honoured, and
     #: `duties_gap` reports that rather than dropping it silently.
     incoterm_style: str | None = "upper"
 
     #: Whether this provider's customs lines mean the per-unit figure or the
-    #: line total. Not guessable and not uniform: it splits two against two
-    #: among the providers that document it. `"unverified"` means shipzil has no
-    #: authoritative source and the current choice is a carried-over default,
-    #: not a decision — see docs/GAPS.md.
+    #: line total. Not guessable and not uniform: it splits evenly among the
+    #: providers that document it, and every supported adapter sets it from that
+    #: provider's own documentation. Either `"line_total"` or `"per_unit"`.
     customs_value_basis: str = "line_total"
 
     @staticmethod
@@ -138,17 +146,12 @@ class Adapter(ABC):
     def customs_lines(shipment: Shipment) -> list[CustomsLine]:
         """Declarable lines, flattened across parcels in order.
 
-        Each line carries **both** the per-unit and the line-total figures,
-        because providers disagree about which one a customs line means and the
-        disagreement is real rather than incidental. Shippo documents
-        `net_weight` as "quantity * weight per item"; ShipEngine documents
-        `products[].value` as "The declared value of *each* item"; Easyship says
-        outright "this value refers to the unit rather than the total". An
-        adapter must take the figure matching its own `customs_value_basis`.
+        Each line carries **both** the per-unit and the line-total figures. An
+        adapter must take the one matching its own `customs_value_basis`.
 
         Flattening loses which parcel a line belongs to. That is unavoidable for
-        Shippo and EasyPost, whose customs item lists are shipment-level with no
-        parcel reference. Adapters that can do better — ShipEngine, via
+        Shippo, whose customs item list is shipment-level with no parcel
+        reference. Adapters that can do better — ShipEngine, via
         `packages[].products[]` — should walk `shipment.parcels` themselves
         rather than use this.
         """
@@ -183,6 +186,8 @@ class Adapter(ABC):
 
     def render_eei(self, shipment: Shipment) -> str | None:
         """The exemption in this provider's spelling, or None to refuse."""
+        if self.eei_style is None:
+            return None
         token = shipment.derived_eei_exemption
         if not token:
             return None
@@ -202,14 +207,8 @@ class Adapter(ABC):
         if shipment.duties_paid_by is DutiesPaidBy.SENDER:
             return "ddp" if self.incoterm_style == "lower" else "DDP"
         if shipment.duties_paid_by is DutiesPaidBy.RECIPIENT:
-            if self.incoterm_style == "ddp_only":
-                # No DDU token exists; omission is recipient-pays. Reported by
-                # `duties_expressed_by_omission` so callers can tell the
-                # difference between "not asked" and "asked, sent nothing".
-                return None
             return "ddu" if self.incoterm_style == "lower" else "DDU"
-        # UNSPECIFIED sends nothing, so the account default applies. shipzil used
-        # to hardcode DDU here, silently making the recipient liable for duty.
+        # UNSPECIFIED sends nothing, so the provider's account default applies.
         return None
 
     def duties_gap(self, shipment: Shipment) -> Exclusion | None:
@@ -217,15 +216,11 @@ class Adapter(ABC):
 
         Same shape as `hazmat_fidelity_gap`, and for the same reason: the caller
         made a commercial decision and shipzil is about to discard it. Measured
-        on the wire, DDP and DDU produced byte-identical payloads on EasyPost and
-        ShipStation v1, so `duties_paid_by` was doing nothing on two of five
-        providers with no indication to the caller.
+        on the wire, ShipStation v1 has no duty field, so `duties_paid_by` cannot
+        be expressed there.
 
-        Deliberately worded as a shipzil limitation, not a provider one. EasyPost
-        may well support duty billing; its documentation is off-limits here, so
-        the honest claim is that *shipzil* does not express it, not that EasyPost
-        cannot. ShipStation v1's `internationalOptions` shows no such field in the
-        scraped HTML, which is absence of evidence rather than proof of absence.
+        Deliberately worded as a shipzil limitation, not a provider one.
+        ShipStation v1's `internationalOptions` shows no such field.
         """
         if shipment.duties_paid_by is DutiesPaidBy.UNSPECIFIED:
             return None
@@ -243,6 +238,19 @@ class Adapter(ABC):
             source="shipzil",
         )
 
+    def eei_gap(self, shipment: Shipment) -> Exclusion | None:
+        """Report an explicit EEI citation this adapter does not transmit."""
+        if not shipment.eei_exemption or self.eei_style is not None:
+            return None
+        return Exclusion(
+            code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+            message=(
+                f"shipzil does not transmit eei_exemption through {self.name}; "
+                "use Shippo or handle the filing outside shipzil"
+            ),
+            source="shipzil",
+        )
+
     def customs_gap(self, shipment: Shipment) -> Exclusion | None:
         """Refuse a cross-border shipment shipzil cannot declare.
 
@@ -254,6 +262,30 @@ class Adapter(ABC):
         """
         if not self.is_cross_border(shipment):
             return None
+        items = [item for parcel in shipment.parcels for item in parcel.items]
+        if not items:
+            return Exclusion(
+                code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+                message=(
+                    f"{self.name} needs item data for a cross-border shipment. "
+                    "Add at least one Item with weight and value."
+                ),
+                source="shipzil",
+            )
+        incomplete = [
+            item.description for item in items if item.weight is None or item.value is None
+        ]
+        if incomplete:
+            shown = ", ".join(repr(name) for name in incomplete[:3])
+            more = f" and {len(incomplete) - 3} more" if len(incomplete) > 3 else ""
+            return Exclusion(
+                code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+                message=(
+                    "every cross-border Item needs both weight and value; missing for "
+                    f"{shown}{more}"
+                ),
+                source="shipzil",
+            )
         if not self.customs_lines(shipment):
             return Exclusion(
                 code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
@@ -265,7 +297,11 @@ class Adapter(ABC):
                 ),
                 source="shipzil",
             )
-        if self.render_eei(shipment) is None:
+        if (
+            shipment.from_address.country == "US"
+            and self.eei_style is not None
+            and self.render_eei(shipment) is None
+        ):
             return Exclusion(
                 code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
                 message=(
@@ -299,7 +335,22 @@ class Adapter(ABC):
                 declared.add("contains_alcohol")
             if dg.dry_ice is not None:
                 declared.add("dry_ice")
-            if dg.un_number or dg.hazard_class or dg.packing_group:
+            if any(
+                (
+                    dg.un_number,
+                    dg.shipping_name,
+                    dg.technical_name,
+                    dg.hazard_class,
+                    dg.packing_group,
+                    dg.packing_instruction,
+                    dg.regulation_level,
+                    dg.regulation_authority,
+                    dg.transport_mode,
+                    dg.reportable_quantity,
+                    dg.emergency_contact_name,
+                    dg.emergency_contact_phone,
+                )
+            ):
                 declared.add("regulated_detail")
             if dg.radioactive:
                 declared.add("radioactive")
@@ -325,35 +376,23 @@ class Adapter(ABC):
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """Purchase postage. Never retried: every implementation sends retries=0.
 
-        shipzil takes no idempotency key. Only EasyPost publishes one, and a key
-        generated per call deduplicates nothing, so offering the parameter would
-        promise more than it delivers. Deduplicate at your own layer, keyed on
-        something you own like an order id. See docs/API-REALITY.md.
+        shipzil takes no idempotency key, because no supported provider documents a
+        caller-supplied one on the purchase path. Offering the parameter would
+        promise a guarantee shipzil cannot keep. Deduplicate at your own layer,
+        keyed on something you own such as an order id.
         """
 
     def void(self, label: Label) -> bool:
         """Refund/cancel an unused label."""
         raise NotImplementedError(f"{self.name} does not support voiding via shipzil yet")
 
-    def _single_parcel_shipment(self, shipment: Shipment, parcel: Parcel) -> Shipment:
+    def single_parcel_shipment(self, shipment: Shipment, parcel: Parcel) -> Shipment:
         """A copy of `shipment` carrying exactly one parcel, for fan-out.
 
-        Uses `replace` rather than naming fields, because the hand-written version
-        silently dropped every field added to `Shipment` after it. It listed four
-        of seven, so `duties_paid_by`, `eei_exemption` and `ship_date` all vanished
-        on the fan-out path — which is the path four of six provider surfaces take
-        for any multi-parcel shipment.
+        Uses `dataclasses.replace` rather than naming fields so a field added to
+        `Shipment` later cannot silently vanish on the fan-out path. Dropping
+        `duties_paid_by` or `eei_exemption` here would let rating succeed and the
+        purchase fail at the carrier.
 
-        The consequences were not cosmetic. A two-parcel DDP shipment reached
-        Shippo with `incoterm` unset, silently reverting duty liability to the
-        recipient. A declared value above the EEI threshold with an explicit
-        `eei_exemption="AES_ITN"` lost the override, so each leg built no customs
-        declaration at all while `customs_gap` still passed on the original
-        shipment: rating succeeded and the purchase would have failed at the
-        carrier, the precise failure this library exists to prevent.
-
-        `replace` cannot drift. A new field is carried without anyone remembering
-        to add it here, and `test_fan_out_preserves_every_shipment_field` fails if
-        this is ever written out by hand again.
         """
         return replace(shipment, parcels=(parcel,))

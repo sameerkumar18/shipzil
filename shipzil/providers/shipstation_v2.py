@@ -1,18 +1,14 @@
 """ShipStation API v2 (ShipEngine-derived).
 
-The best-behaved surface of the five. `packages[]` rates several parcels in one
-call, and when a carrier cannot manage it the response says so per carrier with a
+`packages[]` rates several parcels in one call. Per-carrier failures can include a
 machine-readable code:
 
     {"error_code": "multipackage_not_supported",
      "message": "carrier 30718 does not support multipackage...",
      "carrier_code": "usps", "carrier_name": "USPS"}
 
-Partial success with attributed reasons. That vocabulary is what
-`shipzil.normalize` maps every other provider onto.
-
-Credentials for this surface are production-only in practice, so this adapter is
-exercised live for rating and never for purchasing.
+The shared exclusion vocabulary includes these provider codes. Live verification
+in this repository covers rating, not purchase.
 """
 
 from __future__ import annotations
@@ -21,7 +17,6 @@ from decimal import Decimal
 from typing import Any
 
 from ..errors import LabelPurchaseError
-from ..http import request
 from ..models import (
     Address,
     DutiesPaidBy,
@@ -35,17 +30,10 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_provider_code, code_from_text
-from ..service_id import ServiceId
+from ..services import ServiceKey
 from .base import Adapter, Capabilities
 
 BASE = "https://api.shipstation.com/v2"
-
-
-class ShipStationV2Capabilities(Capabilities):
-    native_multi_parcel = True  # verified: 3 packages -> 7 real rates
-    order_resource = False
-    returns_currency = True
-    returns_delivery_estimate = True
 
 
 class ShipStationV2Adapter(Adapter):
@@ -59,7 +47,11 @@ class ShipStationV2Adapter(Adapter):
     # transport mode, radioactive) but needs an itemised products array shipzil
     # does not build yet, so regulated_detail is deliberately NOT claimed.
     hazmat_fields = frozenset({"dry_ice", "contains_alcohol"})
-    capabilities = ShipStationV2Capabilities()
+    capabilities = Capabilities(
+        native_multi_parcel=True,  # verified: 3 packages -> 7 real rates
+        returns_currency=True,
+        returns_delivery_estimate=True,
+    )
 
     def __init__(
         self,
@@ -83,7 +75,7 @@ class ShipStationV2Adapter(Adapter):
         applies, which differs between tenants and makes results irreproducible.
         """
         if self._carrier_ids is None:
-            _status, body = request(
+            _status, body = self.http(
                 "GET", f"{BASE}/carriers", headers=self._headers,
                 timeout=self.timeout, provider=self.name, idempotent=True,
             )
@@ -110,7 +102,7 @@ class ShipStationV2Adapter(Adapter):
         if gap is not None:
             return Quote(excluded=(gap,), via=f"{self.name}:rates")
 
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/rates",
             headers=self._headers,
@@ -183,14 +175,12 @@ class ShipStationV2Adapter(Adapter):
                 continue
             message = str(err.get("message") or "")
             code = code_from_provider_code(err.get("error_code")) or code_from_text(message)
-            # The provider gave a code, so this is fact rather than inference.
-            source = "provider" if err.get("error_code") else "shipzil"
             out.append(
                 Exclusion(
                     code=code,
                     message=message or "shipstation rejected this shipment",
                     carrier=err.get("carrier_code") or err.get("carrier_name"),
-                    source=source,  # type: ignore[arg-type]
+                    source="provider",
                 )
             )
         for bad in response.get("invalid_rates") or []:
@@ -203,7 +193,7 @@ class ShipStationV2Adapter(Adapter):
                     message=notes or "shipstation marked this rate invalid",
                     carrier=bad.get("carrier_code"),
                     service=bad.get("service_type"),
-                    source="shipzil",
+                    source="provider",
                 )
             )
         return out
@@ -317,7 +307,7 @@ class ShipStationV2Adapter(Adapter):
         return Rate(
             carrier=str(data.get("carrier_friendly_name") or data.get("carrier_code") or ""),
             service=str(data.get("service_type") or ""),
-            service_id=ServiceId.build(
+            service_key=ServiceKey.build(
                 provider=self.name,
                 # carrier_code is already lowercase and stable; friendly_name
                 # carries a registered-trademark glyph ("UPS® Ground").
@@ -353,7 +343,7 @@ class ShipStationV2Adapter(Adapter):
                 "this rate has no shipstation rate_id and cannot be bought",
                 provider=self.name,
             )
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/labels/rates/{rate_id}",
             headers=self._headers,
@@ -367,7 +357,7 @@ class ShipStationV2Adapter(Adapter):
     def void(self, label: Label) -> bool:
         if not label.shipment_id:
             return False
-        _status, body = request(
+        _status, body = self.http(
             "PUT", f"{BASE}/labels/{label.shipment_id}/void",
             headers=self._headers, timeout=self.timeout, provider=self.name, retries=0,
         )

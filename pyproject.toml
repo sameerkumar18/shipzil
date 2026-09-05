@@ -4,18 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shipzil"
-version = "0.1.0"
-description = "One shipping interface across EasyPost, Shippo, ShipStation and Easyship, with multi-parcel support on all of them."
+dynamic = ["version"]
+description = "OpenRouter for Shipping: one Python interface across Shippo, ShipStation and Easyship."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Sameer Kumar", email = "sam@sameerkumar.website" }]
-keywords = ["shipping", "parcel", "easypost", "shippo", "shipstation", "easyship", "logistics"]
+keywords = ["shipping", "parcel", "shippo", "shipstation", "easyship", "logistics"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -31,31 +30,20 @@ dependencies = []
 [project.urls]
 Repository = "https://github.com/sameerkumar18/shipzil"
 Issues = "https://github.com/sameerkumar18/shipzil/issues"
+Documentation = "https://sameerkumar18.github.io/shipzil/"
 
 # PEP 735 dependency groups. Not installed by consumers, unlike
 # optional-dependencies, and what `uv sync` picks up by default.
-# The library runs on 3.9; the dev toolchain does not. mypy and modern pytest
-# both dropped 3.9, so they are gated by marker rather than dragging the
-# library's floor up to match them. 3.9 compatibility is verified in an
-# isolated env — see `make check-compat` / the matrix in CONTRIBUTING.
 [dependency-groups]
 dev = [
   "ruff>=0.16",
-  "pytest>=9.1; python_version >= '3.10'",
-  "pytest>=8,<9; python_version < '3.10'",
-  "mypy>=2.3; python_version >= '3.10'",
+  "pytest>=9.1",
+  "mypy>=2.3",
 ]
-# Docs only. Kept out of `dev` so `uv sync` for a code change stays fast, and
-# out of the library entirely — `dependencies` is empty on purpose and stays that
-# way. Build with `make docs` / `uv run --group docs mkdocs serve`.
-# mkdocs is pinned below 2.0 on purpose. The Material maintainers state that
-# MkDocs 2.0 removes the plugin system and the theming system with no migration
-# path, which would break this site silently on a fresh install. Revisit when
-# that has settled; an unpinned docs build is a surprise waiting to happen.
-docs = [
-  "mkdocs>=1.6,<2",
-  "mkdocs-material>=9.5,<10",
-]
+
+# Single source of truth for the version, so pyproject and __init__ cannot drift.
+[tool.hatch.version]
+path = "shipzil/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["shipzil"]
@@ -67,16 +55,14 @@ markers = ["live: hits real provider sandboxes; requires credentials in .env"]
 
 [tool.ruff]
 line-length = 100
-# Lint against the oldest supported version so a 3.10+ idiom cannot slip in.
-target-version = "py39"
+# Lint against the oldest supported version.
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "BLE", "PTH"]
 
 [tool.mypy]
-# mypy itself refuses to target 3.9 (minimum is 3.10), so it cannot verify the
-# actual floor. 3.9 compatibility is enforced by ruff's target-version = "py39"
-# plus a real test run on 3.9 — see CONTRIBUTING.
+# Matches requires-python, so the type checker verifies the real floor.
 python_version = "3.10"
 strict = true
 warn_return_any = false

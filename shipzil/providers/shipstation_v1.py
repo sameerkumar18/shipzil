@@ -1,6 +1,7 @@
 """ShipStation API v1 (legacy, `ssapi.shipstation.com`).
 
-The bluntest of the five surfaces, and the one that forces the most compromise.
+The bluntest of the supported surfaces, and the one that forces the most
+compromise.
 
 Three things make it structurally different from every other adapter here:
 
@@ -37,7 +38,6 @@ from ..errors import (
     RateLimitError,
     ValidationError,
 )
-from ..http import request
 from ..models import (
     Exclusion,
     ExclusionCode,
@@ -48,17 +48,10 @@ from ..models import (
     Strategy,
 )
 from ..normalize import code_from_text
-from ..service_id import ServiceId
+from ..services import ServiceKey
 from .base import Adapter, Capabilities
 
 BASE = "https://ssapi.shipstation.com"
-
-
-class ShipStationV1Capabilities(Capabilities):
-    native_multi_parcel = False  # verified: 3 parcels -> HTTP 400
-    order_resource = False
-    returns_currency = False  # v1 sends no currency field at all
-    returns_delivery_estimate = False  # nor any delivery estimate
 
 
 class ShipStationV1Adapter(Adapter):
@@ -72,7 +65,11 @@ class ShipStationV1Adapter(Adapter):
     incoterm_style = None
     # No hazmat fields found anywhere in the v1 documentation.
     hazmat_fields = frozenset()
-    capabilities = ShipStationV1Capabilities()
+    capabilities = Capabilities(
+        native_multi_parcel=False,  # verified: 3 parcels -> HTTP 400
+        returns_currency=False,  # v1 sends no currency field at all
+        returns_delivery_estimate=False,  # nor any delivery estimate
+    )
 
     def __init__(
         self,
@@ -90,9 +87,9 @@ class ShipStationV1Adapter(Adapter):
         which is the useful default but also the most expensive: one extra HTTP
         call per carrier, against 40 req/min. Pass an explicit tuple to bound it.
 
-        `test_labels` defaults to **True** because the only v1 credentials that
-        exist in practice are production. Set it to False deliberately, and only
-        when you intend to spend money.
+        `test_labels` defaults to True because ShipStation v1 has no sandbox.
+        Set it to False only when you intend to purchase postage. Retained
+        no-charge evidence covers one Stamps.com/USPS test label.
         """
         if not api_key or not api_secret:
             raise ConfigurationError(
@@ -138,7 +135,7 @@ class ShipStationV1Adapter(Adapter):
             return self.carriers
         if self._carrier_cache is not None:
             return self._carrier_cache
-        _status, body = request(
+        _status, body = self.http(
             "GET",
             f"{BASE}/carriers",
             headers=self._headers,
@@ -235,7 +232,7 @@ class ShipStationV1Adapter(Adapter):
         )
 
     def _international_options(self, shipment: Shipment) -> dict[str, Any] | None:
-        """v1's `internationalOptions`, the thinnest customs surface of the five.
+        """Build ShipStation v1 `internationalOptions`.
 
         Its `customsItems` carry only description, quantity, value,
         harmonizedTariffCode and countryOfOrigin. **There is no per-item weight
@@ -306,7 +303,7 @@ class ShipStationV1Adapter(Adapter):
             # A packageCode supplies the size; sending both is contradictory.
             payload.pop("dimensions", None)
 
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/shipments/getrates",
             headers=self._headers,
@@ -340,12 +337,14 @@ class ShipStationV1Adapter(Adapter):
         return Rate(
             carrier=carrier_code,
             service=service_name,
-            service_id=ServiceId.build(
+            service_key=ServiceKey.build(
                 provider=self.name,
                 # carrier_code is the reseller here: USPS rates arrive as
                 # "stamps_com", which normalises back to usps.
                 carrier=carrier_code,
-                service=base_service,
+                # serviceCode is the stable bookable key; the display name above
+                # supplies the packaging label that v1 does not expose separately.
+                service=str(data.get("serviceCode") or base_service),
                 packaging=packaging or None,
             ),
             amount=shipment_cost + other_cost,
@@ -416,7 +415,7 @@ class ShipStationV1Adapter(Adapter):
                 "height": float(height),
             }
 
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/shipments/createlabel",
             headers=self._headers,
@@ -442,6 +441,7 @@ class ShipStationV1Adapter(Adapter):
             tracking_number=str(data.get("trackingNumber") or ""),
             # v1 returns the label as base64 in `labelData`, not a URL.
             label_url="",
+            label_data=str(data.get("labelData") or "") or None,
             carrier=rate.carrier,
             service=rate.service,
             amount=Decimal(str(cost)) if cost is not None else rate.amount,
@@ -452,7 +452,7 @@ class ShipStationV1Adapter(Adapter):
             raw={
                 **data,
                 "_test_label": self.test_labels,
-                # Keep the payload small in logs; the caller can still decode it.
+                # Keep the duplicate payload out of logs; Label.label_data retains it.
                 "labelData": "<base64 omitted>" if data.get("labelData") else None,
             },
         )
@@ -474,7 +474,7 @@ class ShipStationV1Adapter(Adapter):
                 "this label has no shipstation v1 shipmentId and cannot be voided",
                 provider=self.name,
             )
-        _status, body = request(
+        _status, body = self.http(
             "POST",
             f"{BASE}/shipments/voidlabel",
             headers=self._headers,

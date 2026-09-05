@@ -1,8 +1,8 @@
 """Exception hierarchy.
 
-Provider messages are never swallowed. On three of the five surfaces the only
+Provider messages are never swallowed. On most supported surfaces the only
 statement of what actually went wrong arrives in a `messages` array alongside a
-2xx — see docs/API-REALITY.md — so every error carries them through.
+2xx, so every error carries them through.
 """
 
 from __future__ import annotations

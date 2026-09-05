@@ -1,11 +1,10 @@
 """Normalising provider prose into a single exclusion vocabulary.
 
-ShipStation v2 is the only surface that reports "this carrier cannot do that" in
-structured, per-carrier form, so its `error_code` values are the vocabulary. The
-other four providers say the same things in prose, and this module maps them on.
+ShipStation v2 reports structured per-carrier errors. Other adapters receive some
+equivalent failures as prose, which this module maps onto the shared vocabulary.
 
-Every inference made here is marked `source="shipzil"` when it becomes an
-`Exclusion`, so a guess never reads as a fact.
+This module classifies provider prose. `Exclusion.source` records where the
+failure originated, not whether the normalized code was structured or inferred.
 """
 
 from __future__ import annotations

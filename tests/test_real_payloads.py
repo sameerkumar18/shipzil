@@ -22,7 +22,6 @@ import pytest
 
 from shipzil.models import Strategy
 from shipzil.providers import (
-    EasyPostAdapter,
     EasyshipAdapter,
     ShippoAdapter,
     ShipStationV2Adapter,
@@ -60,6 +59,8 @@ class TestEasyshipRealRates:
         for raw in load("es_rates_single.json")["rates"]:
             rate = adapter._parse_rate(raw)
             assert rate.service_code == raw["courier_service"]["id"]
+            assert rate.service_key is not None
+            assert rate.service_key.service == raw["courier_service"]["id"].replace("-", "_")
 
 
 class TestOtherProvidersRealRates:
@@ -68,7 +69,6 @@ class TestOtherProvidersRealRates:
     @pytest.mark.parametrize(
         "fixture,builder",
         [
-            ("ep_single.json", "easypost"),
             ("shippo_single.json", "shippo"),
             ("ss2_rates_single.json", "shipstation_v2"),
         ],
@@ -78,24 +78,6 @@ class TestOtherProvidersRealRates:
         data = load(fixture)
         assert isinstance(data, (dict, list))
         assert json.dumps(data)  # round-trips
-
-    def test_easypost_rates_populate_carrier_and_currency(self) -> None:
-        data = load("ep_single.json")
-        raw_rates = data.get("rates") or []
-        if not raw_rates:
-            pytest.skip("fixture has no rates array")
-        quote = EasyPostAdapter("k")._quote_from_rates(
-            raw_rates,
-            messages=[],
-            via="easypost:shipments",
-            strategy=Strategy.NATIVE,
-            parcel_count=1,
-            container_id="shp_test",
-        )
-        assert quote.rates
-        for rate in quote.rates:
-            assert rate.carrier
-            assert rate.amount > 0
 
     def test_shippo_rates_populate_carrier(self) -> None:
         data = load("shippo_single.json")
@@ -109,6 +91,8 @@ class TestOtherProvidersRealRates:
         for rate in rates:
             assert rate.carrier
             assert rate.amount > 0
+            assert rate.service_key is not None
+            assert rate.service_key.service == rate.service_code.lower()
 
     def test_shipstation_v2_rates_populate_carrier(self) -> None:
         data = load("ss2_rates_single.json")
@@ -124,6 +108,8 @@ class TestOtherProvidersRealRates:
         assert rates
         for rate in rates:
             assert rate.amount > 0
+            assert rate.service_key is not None
+            assert rate.service_key.service == rate.service_code.lower()
 
 
 class TestShipStationV1RealRates:
@@ -152,6 +138,8 @@ class TestShipStationV1RealRates:
             rate = adapter._parse_rate(row, "stamps_com")
             expected = Decimal(str(row["shipmentCost"])) + Decimal(str(row["otherCost"]))
             assert rate.amount == expected
+            assert rate.service_key is not None
+            assert rate.service_key.service == row["serviceCode"].lower()
             # Quoting shipmentCost alone is the bug this guards against.
             assert rate.amount >= Decimal(str(row["shipmentCost"]))
 
@@ -235,6 +223,8 @@ class TestShipStationV1TestLabel:
         label = adapter._label(load("ss1_testlabel.json"), quote)
         assert label.is_test is True
         assert label.shipment_id == "-1"
+        assert label.label_data
+        assert label.raw["labelData"] == "<base64 omitted>"
         # The charge, not the quote. The quote is still on the Rate.
         assert label.amount == Decimal("0.0")
         assert quote.amount == Decimal("4.39")
@@ -251,84 +241,6 @@ class TestShipStationV1TestLabel:
         label = adapter._label(load("ss1_testlabel.json"), rate)
         with pytest.raises(LabelPurchaseError, match="no shipment to void"):
             adapter.void(label)
-
-
-class TestEasyPostOrderBuy:
-    """Buying an EasyPost *order* is a different endpoint and a different body.
-
-    The first implementation sent `POST /shipments/{order_id}/buy` with
-    `{"rate": {"id": ...}}`. Both were wrong, and nothing caught it because only
-    the single-parcel shipment path had ever run against live credentials. The
-    real contract, from EasyPost's own recorded test traffic:
-
-        POST /orders/{id}/buy   {"carrier": "USPS", "service": "GroundAdvantage"}
-        -> {"shipments": [{..., "postage_label": {...}, "tracking_code": ...}, ...]}
-
-    Multi-parcel is this library's headline feature, so this is the single most
-    important purchase path to get right.
-    """
-
-    def test_fixture_is_a_real_multi_shipment_order_buy(self) -> None:
-        d = load("ep_order_buy.json")
-        assert d["object"] == "Order"
-        assert d["id"].startswith("order_")
-        assert len(d["shipments"]) == 2, "one shipment per parcel"
-        for s in d["shipments"]:
-            assert s["postage_label"]["label_url"], "each parcel gets its own label"
-            assert s["tracking_code"], "each parcel gets its own tracking code"
-
-    def test_order_buy_yields_one_label_per_parcel(self) -> None:
-        from shipzil.providers import EasyPostAdapter
-
-        adapter = EasyPostAdapter("EZTKtest")
-        body = load("ep_order_buy.json")
-        labels = tuple(adapter._label(s) for s in body["shipments"])
-        assert len(labels) == 2
-        # Distinct labels, not the same one twice.
-        assert labels[0].tracking_number != labels[1].tracking_number
-        assert labels[0].label_url != labels[1].label_url
-        assert all(lbl.is_test is True for lbl in labels)
-
-    def test_an_order_rate_routes_to_the_orders_endpoint(self) -> None:
-        """The routing decision, without touching the network."""
-        from decimal import Decimal
-
-        from shipzil.models import Rate, Strategy
-        from shipzil.providers import EasyPostAdapter
-
-        adapter = EasyPostAdapter("EZTKtest")
-        seen: dict[str, object] = {}
-
-        def fake_request(method: str, url: str, **kw: object) -> tuple[int, object]:
-            seen["url"] = url
-            seen["json"] = kw.get("json")
-            seen["retries"] = kw.get("retries")
-            return 200, load("ep_order_buy.json")
-
-        import shipzil.providers.easypost as mod
-
-        original = mod.request
-        mod.request = fake_request  # type: ignore[assignment]
-        try:
-            rate = Rate(
-                carrier="USPS",
-                service="GroundAdvantage",
-                amount=Decimal("11.74"),
-                provider="easypost",
-                strategy=Strategy.ORDER,
-                parcel_count=2,
-                raw={"_container_id": "order_c91fef40e21c48a3a4846ab323722583"},
-            )
-            label = adapter.buy(None, rate)  # type: ignore[arg-type]
-        finally:
-            mod.request = original  # type: ignore[assignment]
-
-        assert "/orders/order_c91fef40e21c48a3a4846ab323722583/buy" in str(seen["url"])
-        assert "/shipments/" not in str(seen["url"])
-        # Carrier and service by name, never a rate id.
-        assert seen["json"] == {"carrier": "USPS", "service": "GroundAdvantage"}
-        assert seen["retries"] == 0
-        assert len(label.parcel_labels) == 2
 
 
 class TestEasyshipLabel:
@@ -389,3 +301,38 @@ class TestEasyshipLabel:
         rate = Rate(carrier="FedEx", service="x", amount=Decimal("1"), provider="easyship")
         with pytest.raises(LabelPurchaseError, match="company name"):
             EasyshipAdapter("sand_x").buy(sh, rate)
+
+    def test_easyship_never_invents_item_or_value(self) -> None:
+        from decimal import Decimal
+
+        from shipzil.models import Address, Item, Parcel, Shipment
+        from shipzil.providers import EasyshipAdapter
+        from shipzil.units import Dimensions, Weight
+
+        a = Address(street1="1 A St", city="San Francisco", postal_code="94117")
+        b = Address(street1="1 B St", city="New York", postal_code="10020")
+        adapter = EasyshipAdapter("sand_x", default_category="fashion")
+        no_items = Shipment(
+            a,
+            b,
+            (Parcel(weight=Weight.of(16, "oz"), dimensions=Dimensions.of(10, 8, 4, "in")),),
+        )
+        missing_value = Shipment(
+            a,
+            b,
+            (
+                Parcel(
+                    weight=Weight.of(16, "oz"),
+                    dimensions=Dimensions.of(10, 8, 4, "in"),
+                    items=(Item("shirt", category="fashion"),),
+                ),
+            ),
+        )
+
+        assert adapter.rate_single(no_items).rates == ()
+        assert "will not invent" in adapter.rate_single(no_items).excluded[0].message
+        assert adapter.rate_single(missing_value).rates == ()
+        assert "no value" in adapter.rate_single(missing_value).excluded[0].message
+
+        explicit = Item("shirt", category="fashion", value=Decimal("12"))
+        assert adapter._item(explicit)["declared_customs_value"] == 12.0

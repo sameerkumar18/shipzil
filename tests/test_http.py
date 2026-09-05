@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
+import shipzil as _z
 from shipzil import errors, http
+
+_SHIPMENT = _z.Shipment(
+    _z.Address(street1="1 A St", city="San Francisco", state="CA", postal_code="94117"),
+    _z.Address(street1="1 B St", city="New York", state="NY", postal_code="10020"),
+    (_z.Parcel(weight=_z.Weight.of(1, "lb"), dimensions=_z.Dimensions.of(6, 4, 2, "in")),),
+)
 
 
 class TestQuotaMisclassification:
@@ -52,20 +59,17 @@ class TestQuotaMisclassification:
 class TestNoIdempotencyConcept:
     """shipzil takes no idempotency key, deliberately.
 
-    Only EasyPost publishes one, and shipzil generated a fresh UUID per call,
-    which deduplicates nothing. The earlier design raised CapabilityError when
-    an explicit key was passed to the other four, which was ceremony that
-    refused to help rather than helping. Both are gone. Purchases are simply
+    No current adapter publishes a usable idempotency key. Purchases are simply
     never retried, and callers dedupe at their own layer on an id they own.
     """
 
     def test_buy_signature_takes_no_key(self) -> None:
         import inspect
 
-        import shipzil
+        from shipzil._client import Client as _Client
         from shipzil.providers import Adapter
 
-        assert "idempotency_key" not in inspect.signature(shipzil.Client.buy).parameters
+        assert "idempotency_key" not in inspect.signature(_Client.buy).parameters
         assert "idempotency_key" not in inspect.signature(Adapter.buy).parameters
 
     def test_no_adapter_advertises_idempotency_support(self) -> None:
@@ -77,9 +81,10 @@ class TestNoIdempotencyConcept:
         """Every request to a purchase, label or refund route must pass retries=0.
 
         Checked by walking the AST rather than slicing source text, so moving a
-        call into a helper cannot silently drop the guarantee — which is exactly
-        what happened when EasyPost's buy() was split into _buy_shipment and
-        _buy_order.
+        call into a helper cannot silently drop the guarantee. Adapters call
+        `self.http(...)`, so that is what is matched; `checked` is asserted at the
+        end so a rename that stops matching fails loudly instead of passing
+        vacuously.
         """
         import ast
         import pathlib as _p
@@ -89,7 +94,13 @@ class TestNoIdempotencyConcept:
         for path in sorted(_p.Path("shipzil/providers").glob("*.py")):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "request"):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                is_http_call = (
+                    isinstance(func, ast.Attribute) and func.attr == "http"
+                ) or getattr(func, "id", "") == "request"
+                if not is_http_call:
                     continue
                 url = " ".join(
                     ast.unparse(a) for a in node.args[1:2]
@@ -117,13 +128,6 @@ class TestCredentialGuardsAreBools:
     actually introduced once.
     """
 
-    def test_easypost_is_test_key_is_a_bool_property(self) -> None:
-        from shipzil.providers import EasyPostAdapter
-
-        assert EasyPostAdapter("EZTKtest").is_test_key is True
-        assert EasyPostAdapter("EZAKlive").is_test_key is False
-        assert isinstance(EasyPostAdapter("EZAKlive").is_test_key, bool)
-
     def test_shippo_is_test_token_is_a_bool_property(self) -> None:
         from shipzil.providers import ShippoAdapter
 
@@ -133,24 +137,97 @@ class TestCredentialGuardsAreBools:
 
     def test_a_production_key_cannot_pass_the_guard(self) -> None:
         """The exact expression the live tests use, against a production key."""
-        from shipzil.providers import EasyPostAdapter, ShippoAdapter
+        from shipzil.providers import ShippoAdapter
 
-        assert not EasyPostAdapter("EZAKlive").is_test_key
         assert not ShippoAdapter("shippo_live_x").is_test_token
 
     def test_is_test_mode_is_three_state_across_adapters(self) -> None:
         from shipzil.providers import (
-            EasyPostAdapter,
             EasyshipAdapter,
             ShippoAdapter,
             ShipStationV1Adapter,
             ShipStationV2Adapter,
         )
 
-        assert EasyPostAdapter("EZTKtest").is_test_mode() is True
         assert ShippoAdapter("shippo_test_x").is_test_mode() is True
         assert EasyshipAdapter("sand_x").is_test_mode() is True
         assert ShipStationV1Adapter("k", "s", test_labels=True).is_test_mode() is True
         assert ShipStationV1Adapter("k", "s", test_labels=False).is_test_mode() is False
         # v2 keys carry no marker. None, not False: shipzil cannot tell.
         assert ShipStationV2Adapter("k").is_test_mode() is None
+
+
+class TestTransportIsInjectable:
+    """A caller-supplied transport is the supported seam for logging or replay.
+
+    Tests used to reassign each provider module's `request` global. Adapters now
+    route every call through `Adapter.http`, so a transport set once cannot be
+    bypassed at one forgotten call site.
+    """
+
+    def test_a_supplied_transport_receives_the_request(self) -> None:
+        from transport import RecordingTransport
+
+        from shipzil.providers import ShippoAdapter
+
+        transport = RecordingTransport(default=(200, {"rates": []}))
+        adapter = ShippoAdapter("shippo_test_x")
+        adapter.transport = transport
+
+        adapter.rate_single(_SHIPMENT)
+
+        assert len(transport.requests) == 1
+        sent = transport.requests[0]
+        assert sent.method == "POST"
+        assert sent.url.endswith("/shipments/")
+        assert sent.headers["Authorization"] == "ShippoToken shippo_test_x"
+        assert "shipzil/" in sent.headers["User-Agent"]
+
+    def test_every_adapter_routes_through_its_transport(self) -> None:
+        """No adapter may call the module-level `request` directly."""
+        import ast
+        import pathlib as _p
+
+        offenders = []
+        for path in sorted(_p.Path("shipzil/providers").glob("*.py")):
+            if path.name in {"base.py", "__init__.py"}:
+                continue
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "request":
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert not offenders, (
+            f"these call http.request directly and would bypass a caller's "
+            f"transport: {offenders}"
+        )
+
+    def test_an_http_error_status_still_maps_to_a_shipzil_error(self) -> None:
+        """Error mapping is policy above the transport, so a custom one keeps it."""
+        from transport import RecordingTransport
+
+        import shipzil as z
+        from shipzil.http import HttpResponse
+        from shipzil.providers import ShippoAdapter
+
+        adapter = ShippoAdapter("shippo_test_x")
+        adapter.transport = RecordingTransport(
+            default=HttpResponse(status=401, body=b'{"detail":"bad token"}')
+        )
+
+        with pytest.raises(z.AuthenticationError, match="bad token"):
+            adapter.rate_single(_SHIPMENT)
+
+    def test_a_transport_failure_becomes_a_provider_error(self) -> None:
+        import shipzil as z
+        from shipzil.http import HttpRequest, HttpResponse
+        from shipzil.providers import ShippoAdapter
+
+        class Broken:
+            def send(self, request: HttpRequest) -> HttpResponse:
+                raise OSError("connection reset")
+
+        adapter = ShippoAdapter("shippo_test_x")
+        adapter.transport = Broken()
+
+        with pytest.raises(z.ProviderError, match="network error"):
+            adapter.rate_single(_SHIPMENT)

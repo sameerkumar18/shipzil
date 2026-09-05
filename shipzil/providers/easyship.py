@@ -28,8 +28,7 @@ import time
 from decimal import Decimal
 from typing import Any
 
-from ..errors import LabelPurchaseError, ValidationError
-from ..http import request
+from ..errors import AmbiguousPurchaseError, LabelPurchaseError, ValidationError
 from ..models import (
     Address,
     DangerousGoods,
@@ -46,23 +45,12 @@ from ..models import (
     TrackingLeg,
 )
 from ..normalize import code_from_text
-from ..service_id import ServiceId
+from ..services import ServiceKey
 from .base import Adapter, Capabilities
 
 PRODUCTION_BASE = "https://public-api.easyship.com"
 SANDBOX_BASE = "https://public-api-sandbox.easyship.com"
 API_VERSION = "2024-09"
-
-
-class EasyshipCapabilities(Capabilities):
-    # Verified: 3 parcels -> HTTP 422 "No shipping solutions available".
-    native_multi_parcel = False
-    order_resource = False
-    # Still needs dimensions, but accepts them per item instead of per box and
-    # will compute the box itself. Item-only parcels whose items carry no
-    # dimensions are rejected: "parcels[0].items[0].dimensions can't be blank".
-    returns_currency = True
-    returns_delivery_estimate = True
 
 
 class EasyshipAdapter(Adapter):
@@ -73,7 +61,15 @@ class EasyshipAdapter(Adapter):
     # Per item: contains_battery_pi966 / pi967 / contains_liquids. Easyship is
     # the only provider that distinguishes the two IATA packing instructions.
     hazmat_fields = frozenset({"lithium_batteries", "contains_liquids"})
-    capabilities = EasyshipCapabilities()
+    capabilities = Capabilities(
+        # Verified: 3 parcels -> HTTP 422 "No shipping solutions available".
+        # Dimensions are still required, but accepted per item rather than per box;
+        # item-only parcels whose items carry no dimensions are rejected with
+        # "parcels[0].items[0].dimensions can't be blank".
+        native_multi_parcel=False,
+        returns_currency=True,
+        returns_delivery_estimate=True,
+    )
 
     def __init__(
         self,
@@ -108,7 +104,7 @@ class EasyshipAdapter(Adapter):
 
     def item_categories(self) -> list[str]:
         """Valid category slugs for this account."""
-        _status, body = request(
+        _status, body = self.http(
             "GET", self._url("/item_categories"), headers=self._headers,
             timeout=self.timeout, provider=self.name,
         )
@@ -136,7 +132,7 @@ class EasyshipAdapter(Adapter):
             # Destination only; Easyship has no origin residential field.
             payload["set_as_residential"] = residential
         try:
-            _status, body = request(
+            _status, body = self.http(
                 "POST", self._url("/rates"), headers=self._headers, json=payload,
                 timeout=self.timeout, provider=self.name,
                 idempotent=True,
@@ -146,7 +142,7 @@ class EasyshipAdapter(Adapter):
             text = str(exc)
             return Quote(
                 excluded=(
-                    Exclusion(code=code_from_text(text), message=text, source="shipzil"),
+                    Exclusion(code=code_from_text(text), message=text, source="provider"),
                 ),
                 via=f"{self.name}:rates",
             )
@@ -191,10 +187,10 @@ class EasyshipAdapter(Adapter):
     def _surcharges(cls, data: dict[str, Any]) -> tuple[tuple[str, Decimal], ...]:
         """Non-zero cost components.
 
-        Easyship returns 25 of these and shipzil used to keep only the total, so
-        a 13% gap between base carriage and total was invisible. Worth noting
-        that `residential_full_fee` is reported even when it is not applied, so a
-        caller can see the exposure of an unclassified address.
+        Easyship reports 25 of these, so keeping only the total hides the gap
+        between base carriage and the amount charged. `residential_full_fee` is
+        reported even when it is not applied, which lets a caller see the exposure
+        of an address that has not been classified.
         """
         out = []
         for key in cls._SURCHARGE_KEYS:
@@ -223,12 +219,14 @@ class EasyshipAdapter(Adapter):
         return Rate(
             carrier=str(carrier),
             service=str(service.get("name") or data.get("full_description") or ""),
-            service_id=ServiceId.build(
+            service_key=ServiceKey.build(
                 provider=self.name,
                 # Easyship names services like "FedEx 2Day®", so the carrier is
                 # recovered from the service text when this field is empty.
                 carrier=str(carrier),
-                service=str(service.get("name") or ""),
+                # The UUID is the bookable provider service key; the display name
+                # stays on Rate.service.
+                service=str(service.get("id") or ""),
             ),
             amount=Decimal(str(data.get("total_charge") or 0)),
             currency=currency.upper() if isinstance(currency, str) else None,
@@ -252,30 +250,10 @@ class EasyshipAdapter(Adapter):
     def buy(self, shipment: Shipment, rate: Rate) -> Label:
         """One call: create the shipment and buy its label synchronously.
 
-        This took three wrong attempts, all from trusting prose over the schema:
-
-        1. `POST /shipments/{id}/labels` — **does not exist.** The docstring also
-           claimed it was synchronous and that the batch endpoint was "the
-           asynchronous one and is deliberately unused". Invented both ways.
-        2. `courier_selection: {selected_courier_id}` — rejected,
-           "ShipmentCreate does not define properties: courier_selection".
-        3. Top-level `courier_service_id` — also rejected, even though the prose
-           documentation says to "assign a courier to the shipment using
-           `courier_service_id`". It is real but **nested** under
-           `courier_settings`.
-
-        The actual `ShipmentCreate` schema, read from the OpenAPI definition:
-
-        * `courier_settings.courier_service_id` selects the service.
-        * `shipping_settings.buy_label` and `shipping_settings.buy_label_synchronous`
-          buy the label during creation and wait for it. So there is no need for
-          `POST /batch_labels` and its `not_created -> pending -> generated`
-          polling at all, which is what an earlier version of this method built.
-        * Only `parcels` is required.
-
-        A second label request for a shipment already labelled is refused with
-        "labels already requested", which is Easyship's structural protection
-        against a duplicate purchase.
+        `courier_settings.courier_service_id` selects the quoted service.
+        `shipping_settings.buy_label_synchronous` requests immediate generation.
+        A pending response is polled until `label_timeout`; expiry raises
+        `AmbiguousPurchaseError` because the shipment may still complete.
         """
         parcel = shipment.parcels[0]
         # Purchase validates addresses more strictly than rating does: rating
@@ -296,6 +274,8 @@ class EasyshipAdapter(Adapter):
                 "only surfaces at purchase. Set Address(company=...).",
                 provider=self.name,
             )
+        if gap := self._input_gap(parcel):
+            raise LabelPurchaseError(gap.message, provider=self.name)
         service_id = (rate.service_code or "").strip()
         payload: dict[str, Any] = {
             "origin_address": _address(shipment.from_address),
@@ -316,14 +296,18 @@ class EasyshipAdapter(Adapter):
         if service_id:
             payload["courier_settings"] = {"courier_service_id": service_id}
 
-        _status, created = request(
+        _status, created = self.http(
             "POST", self._url("/shipments"), headers=self._headers, json=payload,
             timeout=self.timeout, provider=self.name, retries=0,
         )
         record = created.get("shipment") or created
         shipment_id = str(record.get("easyship_shipment_id") or record.get("id") or "")
         if not shipment_id:
-            raise LabelPurchaseError("easyship created no shipment id", provider=self.name)
+            raise AmbiguousPurchaseError(
+                "easyship accepted the purchase request but returned no shipment id; "
+                "reconcile before trying again",
+                provider=self.name,
+            )
 
         state = str(record.get("label_state") or "")
         if state == "generated":
@@ -342,7 +326,7 @@ class EasyshipAdapter(Adapter):
         state = ""
         while time.monotonic() < deadline:
             time.sleep(self.poll_interval)
-            _status, body = request(
+            _status, body = self.http(
                 "GET", self._url(f"/shipments/{shipment_id}"),
                 headers=self._headers, timeout=self.timeout,
                 provider=self.name, idempotent=True,
@@ -356,7 +340,7 @@ class EasyshipAdapter(Adapter):
                     f"easyship label generation failed for {shipment_id}",
                     provider=self.name,
                 )
-        raise LabelPurchaseError(
+        raise AmbiguousPurchaseError(
             f"easyship label for {shipment_id} was still {state or 'unknown'} after "
             f"{self.label_timeout:.0f}s. The shipment is confirmed and may still "
             f"complete; check label_state rather than buying again.",
@@ -432,7 +416,7 @@ class EasyshipAdapter(Adapter):
     def void(self, label: Label) -> bool:
         if not label.shipment_id:
             return False
-        _status, body = request(
+        _status, body = self.http(
             "PATCH", self._url(f"/shipments/{label.shipment_id}/cancel"),
             headers=self._headers, json={}, timeout=self.timeout,
             provider=self.name, retries=0,
@@ -443,32 +427,34 @@ class EasyshipAdapter(Adapter):
     # ── translation ─────────────────────────────────────────────────
 
     def _input_gap(self, parcel: Parcel) -> Exclusion | None:
-        """Everything Easyship demands that we refuse to fabricate.
+        """Return the first missing Easyship input required before a network call."""
+        if not parcel.items:
+            return Exclusion(
+                code=ExclusionCode.ITEM_CLASSIFICATION_REQUIRED,
+                message=(
+                    "easyship requires at least one Item; shipzil will not invent "
+                    "parcel contents"
+                ),
+                source="shipzil",
+            )
 
-        Two distinct requirements, both checked before any network call:
+        missing_values = [item for item in parcel.items if item.value is None]
+        if missing_values:
+            return Exclusion(
+                code=ExclusionCode.CUSTOMS_DECLARATION_REQUIRED,
+                message=(
+                    f"easyship requires declared_customs_value on every item; "
+                    f"{len(missing_values)} item(s) have no value"
+                ),
+                source="shipzil",
+            )
 
-        * **A customs classification on every item.** There is no generic
-          category — all 20 slugs are specific (`fashion`, `toys`, `documents`,
-          …) — so there is nothing honest to default to. A category is a customs
-          declaration, and shipzil will not make one on the caller's behalf.
-        * **Dimensions somewhere.** Either a box on the parcel, or dimensions on
-          every item, or a stored `sku` per item for Easyship to look up.
-        """
-        needs_classification = not self.default_category and (
-            any(not i.category and not i.hs_code for i in parcel.items)
-            # A parcel with no items still gets a placeholder item, which needs
-            # a category just as much.
-            or not parcel.items
+        needs_classification = not self.default_category and any(
+            not i.category and not i.hs_code for i in parcel.items
         )
         if needs_classification:
-            if parcel.items:
-                count = sum(1 for i in parcel.items if not i.category and not i.hs_code)
-                detail = f"{count} item(s) have neither"
-            else:
-                detail = (
-                    "this parcel has no items, so shipzil would have to declare one, "
-                    "and there is no generic category to declare it as"
-                )
+            count = sum(1 for i in parcel.items if not i.category and not i.hs_code)
+            detail = f"{count} item(s) have neither"
             return Exclusion(
                 code=ExclusionCode.ITEM_CLASSIFICATION_REQUIRED,
                 message=(
@@ -511,20 +497,6 @@ class EasyshipAdapter(Adapter):
             out["box"] = {"slug": parcel.packaging.code}
         if parcel.items:
             out["items"] = [self._item(i, parcel.dangerous_goods) for i in parcel.items]
-        else:
-            # Easyship requires at least one item. Describe the parcel itself
-            # rather than inventing contents it does not have.
-            out["items"] = [
-                self._item(
-                    Item(
-                        description="Merchandise",
-                        quantity=1,
-                        weight=weight,
-                        value=Decimal("10.00"),
-                        category=self.default_category,
-                    )
-                )
-            ]
         return out
 
     @staticmethod
@@ -548,11 +520,13 @@ class EasyshipAdapter(Adapter):
         return out
 
     def _item(self, item: Item, dg: DangerousGoods | None = None) -> dict[str, Any]:
+        if item.value is None:
+            raise ValueError("Easyship items need an explicit value")
         out: dict[str, Any] = {
             "description": item.description,
             "quantity": item.quantity,
             "declared_currency": item.currency,
-            "declared_customs_value": float(item.value if item.value is not None else 10),
+            "declared_customs_value": float(item.value),
         }
         if item.weight is not None:
             out["actual_weight"] = float(item.weight.to("kg"))

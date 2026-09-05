@@ -2,7 +2,7 @@
 
 Live tests are marked and skipped unless credentials are present, so the suite
 runs offline. Each case here corresponds to something observed in
-docs/API-REALITY.md.
+docs/providers.md or the provider-source notes.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from decimal import Decimal
 import pytest
 
 import shipzil
+from shipzil._client import Client as _Client
 from shipzil.models import Exclusion, ExclusionCode, Quote, Rate, Strategy
 from shipzil.multiparcel import combine_parcel_quotes
 from shipzil.normalize import code_from_provider_code, code_from_text
@@ -234,14 +235,14 @@ def _shipment():
 
 
 def test_max_spend_blocks_a_purchase_before_any_network_call():
-    client = shipzil.Client(_StubAdapter(), max_spend="10")
+    client = _Client(_StubAdapter(), max_spend="10")
     with pytest.raises(shipzil.SpendLimitExceeded):
         client.buy(_shipment(), _rate("USPS", "Ground", 25))
 
 
 def test_a_synthesized_rate_cannot_be_bought_as_one_label():
     # Summing per-parcel quotes produces a number, not a purchasable consignment.
-    client = shipzil.Client(_StubAdapter())
+    client = _Client(_StubAdapter())
     synthetic = Rate(
         carrier="USPS", service="Ground", amount=Decimal(30), provider="stub",
         strategy=Strategy.FANOUT, parcel_count=3,
@@ -251,67 +252,10 @@ def test_a_synthesized_rate_cannot_be_bought_as_one_label():
 
 
 def test_dry_run_never_calls_the_adapter():
-    client = shipzil.Client(_StubAdapter(), dry_run=True)
+    client = _Client(_StubAdapter(), dry_run=True)
     label = client.buy(_shipment(), _rate("USPS", "Ground", 5))
     assert label.tracking_number == "DRYRUN"
     assert label.raw["dry_run"] is True
-
-
-# ── live: EasyPost routes multi-parcel to /orders ───────────────────
-
-_EP_KEY = os.environ.get("EASYPOST_TEST_KEY", "")
-
-
-@pytest.mark.live
-@pytest.mark.skipif(not _EP_KEY, reason="EASYPOST_TEST_KEY not set")
-def test_live_easypost_routes_by_parcel_count():
-    from shipzil.providers import EasyPostAdapter
-
-    adapter = EasyPostAdapter(_EP_KEY)
-    assert adapter.is_test_key, "refusing to run live tests against a production key"
-    client = shipzil.Client(adapter)
-
-    frm = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
-                          postal_code="94117", name="S", phone="4151234567")
-    to = shipzil.Address(street1="1 Rockefeller Plaza", city="New York", state="NY",
-                         postal_code="10020", name="R", phone="2125551234")
-
-    def parcel(oz):
-        return shipzil.Parcel(weight=shipzil.Weight.of(oz, "oz"),
-                              dimensions=shipzil.Dimensions.of(10, 8, 4, "in"))
-
-    single = client.get_rates(shipzil.Shipment(frm, to, (parcel(16),)))
-    assert single.rates
-    assert single.via == "easypost:shipments"
-    assert single.strategy is Strategy.NATIVE
-
-    multi = client.get_rates(shipzil.Shipment(frm, to, (parcel(16), parcel(32), parcel(8))))
-    assert multi.rates, multi.explain()
-    assert multi.via == "easypost:orders"
-    assert multi.strategy is Strategy.ORDER
-    # Order-level rates are real provider quotes, not sums we computed.
-    assert not multi.rates[0].is_synthesized
-    assert multi.rates[0].parcel_count == 3
-    # Three parcels should cost more than one.
-    assert multi.cheapest.amount > single.cheapest.amount
-
-
-@pytest.mark.live
-@pytest.mark.skipif(not _EP_KEY, reason="EASYPOST_TEST_KEY not set")
-def test_live_easypost_refuses_item_only_parcels_with_a_reason():
-    from shipzil.providers import EasyPostAdapter
-
-    client = shipzil.Client(EasyPostAdapter(_EP_KEY))
-    a = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
-                        postal_code="94117", name="S", phone="4151234567")
-    b = shipzil.Address(street1="1 Rockefeller Plaza", city="New York", state="NY",
-                        postal_code="10020", name="R", phone="2125551234")
-    itemised = shipzil.Parcel(items=(shipzil.Item("tshirt", quantity=2, category="fashion"),))
-
-    quote = client.get_rates(shipzil.Shipment(a, b, (itemised,)))
-    assert not quote.rates
-    assert quote.excluded[0].code is ExclusionCode.DIMENSIONS_REQUIRED
-    assert "cannot derive" in quote.excluded[0].message
 
 
 # ── normalisation: prose to the ShipStation v2 vocabulary ───────────
@@ -332,7 +276,7 @@ def test_provider_codes_are_taken_verbatim():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        # Real strings observed from each provider — see docs/API-REALITY.md.
+        # Real strings observed from each provider — see docs/provider-sources.md.
         ("carrier 30718 does not support multipackage. unable to rate the shipment",
          ExclusionCode.MULTIPACKAGE_NOT_SUPPORTED),
         ("Carrier account shippo_usps_master doesn't support one or more shipment options",
@@ -363,7 +307,7 @@ def test_live_shipstation_v2_native_multi_parcel_with_attributed_exclusions():
     """v2 rates 3 packages natively AND names the carrier that cannot."""
     from shipzil.providers import ShipStationV2Adapter
 
-    client = shipzil.Client(ShipStationV2Adapter(_SS2_KEY))
+    client = _Client(ShipStationV2Adapter(_SS2_KEY))
     frm = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
                           postal_code="94117", name="S", phone="4151234567")
     to = shipzil.Address(street1="1 Rockefeller Plaza", city="New York", state="NY",
@@ -406,7 +350,7 @@ def test_live_shippo_multi_parcel_is_emulated_and_labelled_as_such():
     adapter = ShippoAdapter(_SHIPPO_TOKEN)
     assert adapter.is_test_token, "refusing to run live tests against a live token"
     assert adapter.capabilities.emulates_multi_parcel
-    client = shipzil.Client(adapter)
+    client = _Client(adapter)
 
     frm = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
                           postal_code="94117", name="S", phone="4151234567",
@@ -449,7 +393,9 @@ def test_live_shippo_buy_and_void_a_test_label():
     """Exercise the real purchase path end to end on a test token."""
     from shipzil.providers import ShippoAdapter
 
-    client = shipzil.Client(ShippoAdapter(_SHIPPO_TOKEN))
+    adapter = ShippoAdapter(_SHIPPO_TOKEN)
+    assert adapter.is_test_token, "refusing to run purchase test with a live Shippo token"
+    client = _Client(adapter)
     frm = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
                           postal_code="94117", name="S", phone="4151234567",
                           email="s@example.com")
@@ -470,10 +416,75 @@ def test_live_shippo_buy_and_void_a_test_label():
     assert label.label_url.startswith("http")
     assert label.provider == "shippo"
 
-    # Shippo rejects refunds on test-mode labels: HTTP 201, status "ERROR",
-    # transaction -> REFUNDREJECTED, messages empty. A silent False would hide
-    # that, so void() raises and says the provider gave no reason.
-    with pytest.raises(shipzil.ShipzilError) as caught:
-        client.void(label)
-    assert "rejected the refund" in str(caught.value)
-    assert "gave no reason" in str(caught.value)
+    # The sandbox currently accepts the refund. Keep the assertion on the
+    # contract, not on a stale historical sandbox quirk: Shippo may return
+    # SUCCESS, QUEUED or PENDING for an accepted asynchronous refund.
+    assert client.void(label) is True
+
+
+# ── live: two-source Gateway aggregation ────────────────────────────
+#
+# Rating only, and dry_run=True so no purchase can occur even by accident. The
+# ShipStation v2 credential is production, which is why this asserts nothing about
+# buying: `POST /rates` is read-only and charges nothing.
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    not (_SHIPPO_TOKEN and _SS2_KEY),
+    reason="needs SHIPPO_TEST_TOKEN and SHIPSTATION_V2_KEY",
+)
+def test_live_two_sources_aggregate_with_provenance():
+    """Two real providers in one call, each rate attributable to its own source.
+
+    Single-source aggregation and stubbed multi-source were both already covered.
+    This is the one that proves the product claim against real APIs.
+    """
+    from shipzil.providers import ShippoAdapter
+
+    assert ShippoAdapter(_SHIPPO_TOKEN).is_test_token, (
+        "refusing to run live tests against a live token"
+    )
+
+    gateway = shipzil.Gateway(
+        shippo=_SHIPPO_TOKEN,
+        shipstation_v2=_SS2_KEY,
+        dry_run=True,
+    )
+    frm = shipzil.Address(street1="215 Clayton St", city="San Francisco", state="CA",
+                          postal_code="94117", name="S", phone="4155550100",
+                          email="s@example.com")
+    to = shipzil.Address(street1="1600 Pennsylvania Ave NW", city="Washington", state="DC",
+                         postal_code="20500", name="R", phone="2025550100",
+                         email="r@example.com")
+    shipment = shipzil.Shipment(
+        frm, to,
+        (shipzil.Parcel(weight=shipzil.Weight.of(16, "oz"),
+                        dimensions=shipzil.Dimensions.of(10, 8, 4, "in")),),
+    )
+
+    quote = gateway.get_rates(shipment)
+
+    assert [r.source for r in quote.sources] == ["shippo", "shipstation_v2"], (
+        "sources must be reported in configured order"
+    )
+    assert all(r.ok for r in quote.sources), [str(e) for e in quote.errors]
+
+    contributing = {rate.source for rate in quote.rates}
+    assert contributing == {"shippo", "shipstation_v2"}, (
+        f"expected both sources to contribute rates, got {contributing}"
+    )
+
+    # Provenance: every rate names a configured source and a matching provider.
+    for rate in quote.rates:
+        assert rate.source in gateway.sources
+        assert rate.provider == gateway.sources[rate.source].name
+        assert rate.service_key is not None
+        assert rate.service_key.provider == rate.provider
+
+    # Rates arrive grouped by configured source order. Providers return a varying
+    # number of rates run to run, so the count is not asserted — the grouping is.
+    order = [r.source for r in quote.rates]
+    last_shippo = max((i for i, s in enumerate(order) if s == "shippo"), default=-1)
+    first_v2 = min((i for i, s in enumerate(order) if s == "shipstation_v2"), default=-1)
+    assert last_shippo < first_v2, f"sources interleaved: {order}"

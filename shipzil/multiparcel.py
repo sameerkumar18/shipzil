@@ -1,10 +1,10 @@
 """Multi-parcel emulation.
 
-Only two of six provider surfaces can rate more than one parcel in a single call
-(EasyPost's `/orders`, ShipStation v2's `packages[]`). Four cannot, and each
-refuses differently — silently in two cases. See docs/API-REALITY.md.
+Only one of the four supported provider surfaces can rate more than one parcel in
+a single call (ShipStation v2's `packages[]`). The other three cannot, and each
+refuses differently — silently in some cases.
 
-Reporting "unsupported" on four of six would make the abstraction useless, so
+Reporting "unsupported" on three of four would make the abstraction useless, so
 where a provider cannot do it natively, shipzil rates each parcel separately and
 combines the results into something shaped like a single multi-parcel quote.
 
@@ -34,10 +34,11 @@ __all__ = ["combine_parcel_quotes"]
 def _service_key(rate: Rate) -> tuple[str, str]:
     """Identity of a service for combination purposes.
 
-    Carrier plus service name. Deliberately not the service *code*: those vary
-    per parcel on some providers (EasyPost issues a distinct rate id per parcel),
-    so keying on them would never match.
+    Prefer the stable gateway key. The display fallback keeps custom third-party
+    adapters compatible while they migrate to `Rate.service_key`.
     """
+    if rate.service_key is not None:
+        return (rate.service_key.provider, rate.service_key.slug)
     return (rate.carrier.strip().lower(), rate.service.strip().lower())
 
 
@@ -164,4 +165,6 @@ def _sum_rates(rates: list[Rate], *, provider: str, parcel_count: int) -> Rate:
         strategy=Strategy.FANOUT,
         parcel_count=parcel_count,
         raw={"per_parcel": [r.raw for r in rates], "amounts": [str(r.amount) for r in rates]},
+        service_key=first.service_key,
+        source=first.source,
     )

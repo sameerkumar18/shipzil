@@ -7,13 +7,17 @@ this library's history.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Callable
 from decimal import Decimal
 
 import pytest
+from transport import RecordingTransport
 
 import shipzil as z
+from shipzil._client import Client as _Client
 from shipzil.providers import (
-    EasyPostAdapter,
+    Adapter,
     EasyshipAdapter,
     ShippoAdapter,
     ShipStationV1Adapter,
@@ -60,17 +64,15 @@ class TestAddressClass:
         [
             ShippoAdapter("shippo_test_x"),
             ShipStationV1Adapter("k", "s"),
-            EasyPostAdapter("EZTKx"),
         ],
     )
     def test_no_adapter_sends_false_for_unknown(self, adapter: object) -> None:
         """The bug: bool(None) is False, which asserts commercial for ~$6/parcel."""
-        import shipzil.providers.easypost as ep
         import shipzil.providers.shippo as sp
         import shipzil.providers.shipstation_v1 as s1
 
         unknown = z.Address(street1="a", city="b", postal_code="c")
-        for mod, key in ((sp, "is_residential"), (ep, "residential"), (s1, "residential")):
+        for mod, key in ((sp, "is_residential"), (s1, "residential")):
             out = mod._address(unknown)
             assert out.get(key) is not False, f"{mod.__name__} sent False for unknown"
 
@@ -85,10 +87,6 @@ class TestDutyLiability:
         (ShippoAdapter("shippo_test_x"), "DDP", "DDU"),
         (EasyshipAdapter("sand_x"), "DDP", "DDU"),
         (ShipStationV2Adapter("k"), "ddp", "ddu"),
-        # EasyPost's options.incoterm enum has no DDU, and its docs say anything
-        # other than DDP puts duties on the recipient, so recipient-pays is
-        # expressed by omitting the field.
-        (EasyPostAdapter("EZTKx"), "DDP", None),
         (ShipStationV1Adapter("k", "s"), None, None),
     )
 
@@ -107,8 +105,7 @@ class TestDutyLiability:
     def test_providers_that_cannot_express_duties_say_so(self) -> None:
         """Silently dropping a commercial decision is the bug being prevented.
 
-        Measured before this existed: DDP and DDU produced byte-identical
-        payloads on EasyPost and ShipStation v1.
+        Measured before this existed: ShipStation v1 had no duty field at all.
         """
         for adapter, ddp, _ddu in self.STYLES:
             gap = adapter.duties_gap(_ship(z.DutiesPaidBy.SENDER))
@@ -117,22 +114,6 @@ class TestDutyLiability:
                 assert gap.code is z.ExclusionCode.DUTIES_UNSUPPORTED
             else:
                 assert gap is None, f"{adapter.name} expresses duties, should not warn"
-
-    def test_easypost_expresses_ddp_but_has_no_ddu_token(self) -> None:
-        """options.incoterm: CFR CIF CIP CPT DAT DAP DDP EXW FAS FCA FOB.
-
-        No DDU. "Setting this value to anything other than 'DDP' will pass the
-        cost and responsibility of duties on to the recipient", so omitting is
-        the faithful expression of recipient-pays and shipzil does not invent a
-        term. Sending e.g. DAP to mean "recipient pays" would silently change
-        the delivery terms too.
-        """
-        a = EasyPostAdapter("EZTKx")
-        assert a.incoterm_style == "ddp_only"
-        assert a.render_incoterm(_ship(z.DutiesPaidBy.SENDER)) == "DDP"
-        assert a.render_incoterm(_ship(z.DutiesPaidBy.RECIPIENT)) is None
-        # Expressible, so no gap in either direction.
-        assert a.duties_gap(_ship(z.DutiesPaidBy.RECIPIENT)) is None
 
     def test_no_duties_gap_when_the_caller_expressed_no_preference(self) -> None:
         sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
@@ -256,19 +237,6 @@ class TestHazmat:
         assert "lithium_batteries" in EasyshipAdapter("sand_x").hazmat_fields
         # v1 has no hazmat fields at all.
         assert ShipStationV1Adapter("k", "s").hazmat_fields == frozenset()
-        # EasyPost's options.hazmat is a large enum (LITHIUM, CLASS_9_*, ORMD,
-        # LIMITED_QUANTITY, DIVISION_*), with separate dry_ice/dry_ice_weight/
-        # dry_ice_medical and alcohol booleans. This was frozenset() while its
-        # docs were unread, which made shipzil warn about detail EasyPost takes.
-        # EasyPost's options.hazmat enum is large (LITHIUM, CLASS_9_*, ORMD,
-        # DIVISION_*), and `frozenset()` here was an assumption made while its
-        # docs were unread. shipzil claims only the two it actually emits:
-        # mapping PI965/966/967 onto CLASS_9_NEW_LITHIUM_INDIVIDUAL vs
-        # CLASS_9_NEW_LITHIUM_DEVICE vs CLASS_9_UNMARKED_LITHIUM is a regulatory
-        # call, so lithium stays reported as dropped rather than guessed.
-        ep = EasyPostAdapter("EZTKx").hazmat_fields
-        assert ep == frozenset({"dry_ice", "contains_alcohol"})
-        assert "lithium_batteries" not in ep
 
     def test_dropped_detail_is_reported_not_swallowed(self) -> None:
         dg = z.DangerousGoods(
@@ -297,17 +265,13 @@ class TestHazmat:
 
     def test_the_gap_reaches_the_quote_via_the_client(self) -> None:
         """Attached by Client so no adapter can forget it."""
-        import shipzil.providers.shipstation_v1 as s1
-
         dg = z.DangerousGoods(lithium_batteries=z.LithiumBatteryPacking.PACKED_WITH_EQUIPMENT)
         sh = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX, dangerous_goods=dg),))
         adapter = ShipStationV1Adapter("k", "s", carriers=("stamps_com",))
-        original = s1.request
-        s1.request = lambda *a, **k: (200, [])  # type: ignore[assignment]
-        try:
-            quote = z.Client(adapter).get_rates(sh)
-        finally:
-            s1.request = original  # type: ignore[assignment]
+        adapter.transport = RecordingTransport(default=(200, []))
+
+        quote = _Client(adapter).get_rates(sh)
+
         codes = [e.code for e in quote.excluded]
         assert z.ExclusionCode.HAZMAT_DETAIL_UNSUPPORTED in codes
 
@@ -528,27 +492,22 @@ class TestFlatRateEndToEnd:
         sh = z.Shipment(
             FROM, TO, (z.Parcel(weight=LB, packaging=z.PackagingTemplate("flat_rate_envelope")),)
         )
-        captured: dict[str, object] = {}
-        import shipzil.providers.shipstation_v1 as s1
+        transport = RecordingTransport(default=(200, []))
+        a.transport = transport
 
-        original = s1.request
-        s1.request = lambda *a, **k: (captured.update(k.get("json") or {}), (200, []))[1]  # type: ignore[assignment]
-        try:
-            a._rates_for_carrier("stamps_com", sh)
-        finally:
-            s1.request = original  # type: ignore[assignment]
-        assert captured["packageCode"] == "flat_rate_envelope"
-        assert "dimensions" not in captured
+        a._rates_for_carrier("stamps_com", sh)
+
+        sent = transport.bodies[0]
+        assert isinstance(sent, dict)
+        assert sent["packageCode"] == "flat_rate_envelope"
+        assert "dimensions" not in sent
 
 
 class TestCustomsAcrossAllProviders:
     """Every adapter builds customs, in its own spelling.
 
-    Two of these were written and never wired into a request. `_customs_info`
-    and `_international_options` both existed, were correct, and were called by
-    nothing, so EasyPost's international purchase still failed with "The request
-    could not be understood by the server due to malformed syntax". There is now
-    a test asserting no private helper is orphaned.
+    The test also asserts no private helper is orphaned, because a correct builder
+    whose output is discarded still returns the right thing.
     """
 
     CA = z.Address(
@@ -588,7 +547,7 @@ class TestCustomsAcrossAllProviders:
                     used.add(n.id)
             elsewhere = "".join(q.read_text() for q in files if q != path)
             orphans = sorted(
-                d for d in defined - used if d not in elsewhere and d != "_unused"
+                d for d in defined - used if d not in elsewhere
             )
             assert not orphans, f"{path.name}: defined but never called: {orphans}"
 
@@ -605,8 +564,8 @@ class TestCustomsAcrossAllProviders:
           Easyship   PER UNIT    "this value refers to the unit rather than
                                   the total"
 
-        shipzil sent line totals everywhere until these were read, so v2 and
-        Easyship were over-declaring by a factor of the quantity.
+        The basis is explicit instead of being inferred from a shared payload
+        helper, so v2 and Easyship remain per-unit.
         """
         sh = self._intl()
 
@@ -633,34 +592,30 @@ class TestCustomsAcrossAllProviders:
         assert item["quantity"] == 2
 
     def test_every_adapter_declares_which_basis_it_uses(self) -> None:
-        """An undeclared basis is an unexamined one; EasyPost's is unverified."""
+        """An undeclared basis is an unexamined one."""
         expected = {
             "shippo": "line_total",
             "shipstation_v1": "line_total",
             "shipstation_v2": "per_unit",
             "easyship": "per_unit",
-            "easypost": "line_total",
         }
         for adapter in (
             ShippoAdapter("shippo_test_x"),
             ShipStationV1Adapter("k", "s"),
             ShipStationV2Adapter("k"),
             EasyshipAdapter("sand_x"),
-            EasyPostAdapter("EZTKx"),
         ):
             assert adapter.customs_value_basis == expected[adapter.name]
 
     def test_customs_lines_carry_both_bases(self) -> None:
-        line = EasyPostAdapter("EZTKx").customs_lines(self._intl())[0]
+        line = ShippoAdapter("shippo_test_x").customs_lines(self._intl())[0]
         assert (line.unit_value, line.line_value) == (Decimal("15"), Decimal("30"))
         assert float(line.unit_weight.to("oz")) == 6.0
         assert float(line.line_weight.to("oz")) == 12.0
 
     def test_provider_specific_field_names(self) -> None:
-        """The same concept, four spellings. None is portable."""
+        """The same concept, three spellings. None is portable."""
         sh = self._intl()
-        ep = EasyPostAdapter("EZTKx")._customs_info(sh)
-        assert "hs_tariff_number" in ep["customs_items"][0]
         assert "hs_code" in ShippoAdapter("shippo_test_x")._customs(sh)["items"][0]
         v1 = ShipStationV1Adapter("k", "s")._international_options(sh)
         assert "harmonizedTariffCode" in v1["customsItems"][0]
@@ -668,9 +623,8 @@ class TestCustomsAcrossAllProviders:
         assert "harmonized_tariff_code" in prods[0]
 
     def test_eei_is_rendered_per_provider(self) -> None:
-        """Same regulation, two spellings. EasyPost wants prose."""
+        """Same regulation, in the provider token spelling."""
         sh = self._intl()
-        assert EasyPostAdapter("EZTKx").render_eei(sh) == "NOEEI 30.37(a)"
         assert ShippoAdapter("shippo_test_x").render_eei(sh) == "NOEEI_30_37_a"
 
     def test_shipstation_v2_uses_lowercase_incoterms(self) -> None:
@@ -690,7 +644,6 @@ class TestCustomsAcrossAllProviders:
     @pytest.mark.parametrize(
         "adapter",
         [
-            EasyPostAdapter("EZTKx"),
             ShippoAdapter("shippo_test_x"),
             ShipStationV1Adapter("k", "s"),
             ShipStationV2Adapter("k"),
@@ -704,7 +657,6 @@ class TestCustomsAcrossAllProviders:
     @pytest.mark.parametrize(
         "adapter",
         [
-            EasyPostAdapter("EZTKx"),
             ShippoAdapter("shippo_test_x"),
             ShipStationV1Adapter("k", "s"),
             ShipStationV2Adapter("k"),
@@ -720,19 +672,32 @@ class TestCustomsAcrossAllProviders:
     def test_high_value_export_is_refused_everywhere(self) -> None:
         big = z.Item("gold bar", quantity=1, value=Decimal("5000"), weight=LB)
         sh = z.Shipment(FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(big,)),))
-        for a in (EasyPostAdapter("EZTKx"), ShippoAdapter("shippo_test_x")):
+        for a in (ShippoAdapter("shippo_test_x"),):
             gap = a.customs_gap(sh)
             assert gap is not None and "AES" in gap.message
+
+    def test_one_incomplete_item_blocks_the_whole_declaration(self) -> None:
+        complete = z.Item("shirt", weight=LB, value=Decimal("20"))
+        incomplete = z.Item("hat", weight=LB)
+        shipment = z.Shipment(
+            FROM,
+            self.CA,
+            (z.Parcel(weight=LB, dimensions=BOX, items=(complete, incomplete)),),
+        )
+
+        gap = ShippoAdapter("shippo_test_x").customs_gap(shipment)
+
+        assert gap is not None
+        assert gap.code is z.ExclusionCode.CUSTOMS_DECLARATION_REQUIRED
+        assert "'hat'" in gap.message
 
 
 class TestCustomsReachesTheWire:
     """Assert customs appears in the outgoing request body, per provider.
 
-    The unit tests above assert what `_customs()` *returns*. They passed while
-    EasyPost's `_customs_info` was never called, because a correct builder whose
-    output is discarded is still a correct builder. These tests patch the single
-    `shipzil.http.request` choke point and inspect the bytes the adapter would
-    actually send, which is the only assertion that would have failed.
+    The unit tests above assert what `_customs()` *returns*. These tests patch the
+    single `shipzil.http.request` choke point and inspect the bytes each adapter
+    would actually send, which catches a builder whose output is discarded.
 
     The stub answers every call with `{}`, so the adapter raises while parsing.
     That is fine and deliberate: the payload is captured at call time, before
@@ -755,65 +720,39 @@ class TestCustomsReachesTheWire:
         )
 
     @staticmethod
-    def _capture(module: object, call: object) -> list[object]:
-        """Run `call`, returning every JSON body the adapter tried to send."""
-        import contextlib
+    def _blob(adapter: Adapter, call: Callable[[], object]) -> str:
+        """Run `call` against a recording transport, returning the bytes sent.
 
-        seen: list[object] = []
-
-        def fake(method: str, url: str, **kw: object) -> tuple[int, dict[str, object]]:
-            seen.append(kw.get("json"))
-            return 200, {}
-
-        original = module.request  # type: ignore[attr-defined]
-        module.request = fake  # type: ignore[attr-defined]
-        try:
-            with contextlib.suppress(Exception):
-                call()  # type: ignore[operator]
-        finally:
-            module.request = original  # type: ignore[attr-defined]
-        return [b for b in seen if b is not None]
-
-    def _blob(self, module: object, call: object) -> str:
-        import json
-
-        bodies = self._capture(module, call)
-        assert bodies, "adapter sent no JSON body at all"
-        return json.dumps(bodies)
-
-    def test_easypost_sends_customs_info_on_shipment_creation(self) -> None:
-        import shipzil.providers.easypost as mod
-
-        adapter = EasyPostAdapter("EZTKx")
-        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
-        assert "customs_info" in blob
-        assert "hs_tariff_number" in blob
-        assert "610910" in blob
-        assert "NOEEI 30.37(a)" in blob
+        The scripted reply is an empty object, so the adapter will fail while
+        parsing. That is deliberate and harmless: the payload is captured at send
+        time. `ShipzilError` is tolerated for that reason; anything else is a real
+        bug and propagates.
+        """
+        transport = RecordingTransport()
+        adapter.transport = transport
+        with contextlib.suppress(z.ShipzilError):
+            call()
+        assert transport.requests, "adapter sent no request at all"
+        assert transport.bodies, "adapter sent no JSON body at all"
+        return transport.blob
 
     def test_shippo_sends_customs_declaration_on_shipment_creation(self) -> None:
-        import shipzil.providers.shippo as mod
-
         adapter = ShippoAdapter("shippo_test_x")
-        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        blob = self._blob(adapter, lambda: adapter.rate_single(self._intl()))
         assert "customs_declaration" in blob
         assert "hs_code" in blob
         assert "NOEEI_30_37_a" in blob
 
     def test_shipstation_v2_sends_customs_and_products_on_rating(self) -> None:
-        import shipzil.providers.shipstation_v2 as mod
-
         adapter = ShipStationV2Adapter("k")
-        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        blob = self._blob(adapter, lambda: adapter.rate_single(self._intl()))
         assert "customs" in blob
         assert "harmonized_tariff_code" in blob
         assert '"terms_of_trade_code": "ddp"' in blob
 
     def test_easyship_sends_customs_bearing_items_on_rating(self) -> None:
-        import shipzil.providers.easyship as mod
-
         adapter = EasyshipAdapter("sand_x")
-        blob = self._blob(mod, lambda: adapter.rate_single(self._intl()))
+        blob = self._blob(adapter, lambda: adapter.rate_single(self._intl()))
         assert "hs_code" in blob
         assert "610910" in blob
         assert "incoterms" in blob
@@ -823,15 +762,13 @@ class TestCustomsReachesTheWire:
 
         So this is the one provider whose customs cannot be proven by rating.
         """
-        import shipzil.providers.shipstation_v1 as mod
-
         adapter = ShipStationV1Adapter("k", "s")
         rate = z.Rate(
             carrier="stamps_com", service="USPS First Class International",
             amount=Decimal("24.69"), service_code="usps_first_class_mail",
             provider="shipstation_v1", raw={"_carrier_code": "stamps_com"},
         )
-        blob = self._blob(mod, lambda: adapter.buy(self._intl(), rate))
+        blob = self._blob(adapter, lambda: adapter.buy(self._intl(), rate))
         assert "internationalOptions" in blob
         assert "customsItems" in blob
         assert "harmonizedTariffCode" in blob
@@ -839,22 +776,16 @@ class TestCustomsReachesTheWire:
 
     def test_domestic_sends_no_customs_anywhere(self) -> None:
         """A domestic shipment must not acquire a customs block."""
-        import shipzil.providers.easypost as ep_mod
-        import shipzil.providers.shippo as sp_mod
-
         domestic = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
-        for mod, adapter in (
-            (ep_mod, EasyPostAdapter("EZTKx")),
-            (sp_mod, ShippoAdapter("shippo_test_x")),
-        ):
-            blob = self._blob(mod, lambda a=adapter: a.rate_single(domestic))
+        for adapter in (ShippoAdapter("shippo_test_x"),):
+            blob = self._blob(adapter, lambda a=adapter: a.rate_single(domestic))
             assert "customs" not in blob, f"{adapter.name} sent customs on a domestic label"
 
 
 class TestFanOutPreservesTheShipment:
     """Fan-out must not quietly change the shipment it is splitting.
 
-    `_single_parcel_shipment` named four of `Shipment`'s seven fields, so
+    `single_parcel_shipment` once named a subset of `Shipment`'s fields, so
     `duties_paid_by`, `eei_exemption` and `ship_date` were dropped on the path
     that four of six provider surfaces take for every multi-parcel shipment. The
     customs work in this module was all verified on single-parcel shipments, so
@@ -889,7 +820,7 @@ class TestFanOutPreservesTheShipment:
             eei_exemption="AES_ITN",
             reference="order-1",
         )
-        leg = ShippoAdapter("shippo_test_x")._single_parcel_shipment(
+        leg = ShippoAdapter("shippo_test_x").single_parcel_shipment(
             shipment, shipment.parcels[0]
         )
         for field in dataclasses.fields(z.Shipment):
@@ -902,16 +833,17 @@ class TestFanOutPreservesTheShipment:
 
     def test_ddp_survives_fan_out_on_the_wire(self) -> None:
         """A two-parcel DDP shipment reached Shippo with `incoterm` unset."""
-        import shipzil.providers.shippo as mod
-
-        client = z.Client(ShippoAdapter("shippo_test_x"))
+        adapter = ShippoAdapter("shippo_test_x")
+        transport = RecordingTransport()
+        adapter.transport = transport
+        client = _Client(adapter)
         shipment = z.Shipment(
             self.FROM, self.CA, (self._parcel("15"), self._parcel("15")),
             duties_paid_by=z.DutiesPaidBy.SENDER,
         )
-        bodies = TestCustomsReachesTheWire._capture(
-            mod, lambda: client.get_rates(shipment)
-        )
+        with contextlib.suppress(z.ShipzilError):
+            client.get_rates(shipment)
+        bodies = transport.bodies
         assert len(bodies) == 2, "expected one request per parcel"
         for body in bodies:
             assert isinstance(body, dict)
@@ -925,16 +857,17 @@ class TestFanOutPreservesTheShipment:
         `customs_gap` runs against the original shipment, which still had the
         override, so rating passed while the legs on the wire carried nothing.
         """
-        import shipzil.providers.shippo as mod
-
-        client = z.Client(ShippoAdapter("shippo_test_x"))
+        adapter = ShippoAdapter("shippo_test_x")
+        transport = RecordingTransport()
+        adapter.transport = transport
+        client = _Client(adapter)
         shipment = z.Shipment(
             self.FROM, self.CA, (self._parcel("4000"), self._parcel("4000")),
             eei_exemption="AES_ITN",
         )
-        bodies = TestCustomsReachesTheWire._capture(
-            mod, lambda: client.get_rates(shipment)
-        )
+        with contextlib.suppress(z.ShipzilError):
+            client.get_rates(shipment)
+        bodies = transport.bodies
         assert len(bodies) == 2
         for body in bodies:
             assert isinstance(body, dict)
@@ -946,87 +879,12 @@ class TestFanOutPreservesTheShipment:
         """The bug was a hand-copied constructor; `replace` cannot drift."""
         import inspect
 
-        source = inspect.getsource(ShippoAdapter._single_parcel_shipment)
+        source = inspect.getsource(ShippoAdapter.single_parcel_shipment)
         assert "replace(" in source
         assert "from_address=shipment.from_address" not in source
 
 
-class TestEasyPostOptionsReachTheWire:
-    """`options.incoterm` exists, so declaring support must mean sending it.
-
-    `render_incoterm` returning "DDP" while no adapter sent it would be the same
-    defined-but-never-called defect the customs builders had. EasyPost keeps duty
-    liability on `shipment.options`, not on `customs_info`, which is why this
-    adapter had nowhere to put it: it had no options block at all.
-    """
-
-    CA = z.Address(
-        street1="220 Yonge St", city="Toronto", state="ON", postal_code="M5B 2H1",
-        name="R", phone="4165550199", email="r@example.com", country="CA",
-    )
-
-    def _sh(self, **kw: object) -> z.Shipment:
-        item = z.Item(
-            "cotton t-shirt", quantity=2, weight=z.Weight.of(6, "oz"),
-            value=Decimal("15"), hs_code="610910", origin_country="US",
-        )
-        return z.Shipment(  # type: ignore[arg-type]
-            FROM, self.CA, (z.Parcel(weight=LB, dimensions=BOX, items=(item,)),), **kw
-        )
-
-    def _blob(self, shipment: z.Shipment) -> str:
-        import shipzil.providers.easypost as mod
-
-        adapter = EasyPostAdapter("EZTKx")
-        return TestCustomsReachesTheWire()._blob(
-            mod, lambda: adapter.rate_single(shipment)
-        )
-
-    def test_ddp_reaches_options_incoterm(self) -> None:
-        blob = self._blob(self._sh(duties_paid_by=z.DutiesPaidBy.SENDER))
-        assert '"incoterm": "DDP"' in blob
-
-    def test_recipient_sends_no_incoterm(self) -> None:
-        """There is no DDU token; omission is the faithful expression."""
-        blob = self._blob(self._sh(duties_paid_by=z.DutiesPaidBy.RECIPIENT))
-        assert "incoterm" not in blob
-
-    def test_unspecified_sends_no_incoterm(self) -> None:
-        assert "incoterm" not in self._blob(self._sh())
-
-    def test_dry_ice_reaches_options_in_ounces(self) -> None:
-        """EasyPost documents dry_ice_weight in ounces; ShipEngine uses kg."""
-        dg = z.DangerousGoods(dry_ice=z.DryIce(contains=True, weight=LB))
-        item = z.Item(
-            "vaccine", quantity=1, weight=z.Weight.of(6, "oz"),
-            value=Decimal("15"), hs_code="300215", origin_country="US",
-        )
-        sh = z.Shipment(
-            FROM, self.CA,
-            (z.Parcel(weight=LB, dimensions=BOX, items=(item,), dangerous_goods=dg),),
-        )
-        blob = self._blob(sh)
-        assert '"dry_ice": true' in blob
-        assert '"dry_ice_weight": "16.0"' in blob
-
-    def test_alcohol_reaches_options(self) -> None:
-        dg = z.DangerousGoods(contains_alcohol=True)
-        item = z.Item(
-            "wine", quantity=1, weight=z.Weight.of(6, "oz"),
-            value=Decimal("15"), hs_code="220421", origin_country="US",
-        )
-        sh = z.Shipment(
-            FROM, self.CA,
-            (z.Parcel(weight=LB, dimensions=BOX, items=(item,), dangerous_goods=dg),),
-        )
-        assert '"alcohol": true' in self._blob(sh)
-
-    def test_domestic_with_no_hazmat_sends_no_options_block(self) -> None:
-        domestic = z.Shipment(FROM, TO, (z.Parcel(weight=LB, dimensions=BOX),))
-        assert "options" not in self._blob(domestic)
-
-
-class TestServiceIdAddressing:
+class TestServiceKeyAddressing:
     """`{provider}-{carrier}-{service}` — the gateway addressing scheme.
 
     Provider-namespaced on purpose. Two providers offering what looks like the same
@@ -1037,13 +895,10 @@ class TestServiceIdAddressing:
 
     def test_carrier_aliases_from_observed_provider_strings(self) -> None:
         """Every input here appeared in recorded traffic under `.probe/`."""
-        from shipzil.service_id import normalize_carrier
+        from shipzil.services import normalize_carrier
 
         assert normalize_carrier("USPS") == "usps"
         assert normalize_carrier("UPS") == "ups"
-        # EasyPost reports account types, not carriers.
-        assert normalize_carrier("UPSDAP") == "ups"
-        assert normalize_carrier("FedExDefault") == "fedex"
         # ShipStation v1 sells USPS through Stamps.com, so an unnormalised
         # carrier filter on "usps" would miss every USPS rate.
         assert normalize_carrier("stamps_com") == "usps"
@@ -1059,20 +914,20 @@ class TestServiceIdAddressing:
         `®` and `©` are dropped for free by the ASCII fold, because NFKD leaves
         them non-ASCII. `™` decomposes to the *letters* `TM`, so it survives the
         fold and would silently become part of the identifier —
-        "FedEx 2Day™" addressing as `2daytm`. Only this case proves the explicit
+        "FedEx 2Day™" addressing as `fedex_2daytm`. Only this case proves the explicit
         replacement is load-bearing.
         """
-        from shipzil.service_id import ServiceId as _S
+        from shipzil.services import ServiceKey as _S
 
-        for glyph, expected in (("®", "2day"), ("™", "2day"), ("©", "2day")):
+        for glyph, expected in (("®", "fedex_2day"), ("™", "fedex_2day"), ("©", "fedex_2day")):
             sid = _S.build(provider="easyship", carrier="", service=f"FedEx 2Day{glyph}")
             assert sid is not None
             assert sid.service == expected, f"{glyph} leaked into the identifier"
-            assert sid.slug == "easyship-fedex-2day"
+            assert sid.slug == "easyship-fedex-fedex_2day"
 
     def test_carrier_recovered_when_embedded_in_the_service_name(self) -> None:
         """v1 and Easyship give no usable carrier field on the rating path."""
-        from shipzil.service_id import carrier_from_service
+        from shipzil.services import carrier_from_service
 
         assert carrier_from_service("USPS Ground Advantage - Package") == "usps"
         assert carrier_from_service("FedEx 2Day®") == "fedex"
@@ -1080,13 +935,13 @@ class TestServiceIdAddressing:
         assert carrier_from_service("GroundAdvantage") == ""
         assert carrier_from_service("Priority") == ""
 
-    def test_carrier_is_not_repeated_in_the_service_component(self) -> None:
-        """ShipStation v2 names services "USPS Ground Advantage"."""
-        sid = z.ServiceId.build(
+    def test_service_component_keeps_the_provider_machine_key(self) -> None:
+        """ShipStation v2's machine key includes the carrier prefix."""
+        sid = z.ServiceKey.build(
             provider="shipstation_v2", carrier="usps", service="USPS Ground Advantage"
         )
         assert sid is not None
-        assert sid.slug == "shipstation_v2-usps-ground_advantage"
+        assert sid.slug == "shipstation_v2-usps-usps_ground_advantage"
 
     def test_packaging_prevents_a_slug_collision(self) -> None:
         """v1 returns two differently-priced rates sharing one serviceCode.
@@ -1094,23 +949,23 @@ class TestServiceIdAddressing:
         "USPS Ground Advantage - Package" and "- Thick Envelope" are distinct
         products. Without packaging in the key they address the same slug.
         """
-        a = z.ServiceId.build(
+        a = z.ServiceKey.build(
             provider="shipstation_v1", carrier="stamps_com",
             service="USPS Ground Advantage", packaging="Package",
         )
-        b = z.ServiceId.build(
+        b = z.ServiceKey.build(
             provider="shipstation_v1", carrier="stamps_com",
             service="USPS Ground Advantage", packaging="Thick Envelope",
         )
         assert a is not None and b is not None
         assert a.slug != b.slug
-        assert a.slug == "shipstation_v1-usps-ground_advantage-package"
-        assert b.slug == "shipstation_v1-usps-ground_advantage-thick_envelope"
+        assert a.slug == "shipstation_v1-usps-usps_ground_advantage-package"
+        assert b.slug == "shipstation_v1-usps-usps_ground_advantage-thick_envelope"
         # Same underlying service, so the unqualified form agrees.
-        assert a.unqualified == b.unqualified == "usps-ground_advantage"
+        assert a.unqualified == b.unqualified == "usps-usps_ground_advantage"
 
     def test_v1_adapter_splits_packaging_out_of_the_service_name(self) -> None:
-        """The collision test above builds ServiceIds by hand; this drives v1.
+        """The collision test above builds ServiceKeys by hand; this drives v1.
 
         v1 encodes packaging into `serviceName` and reuses one `serviceCode`, so
         the split has to happen in the adapter. Without it these two rates — at
@@ -1126,48 +981,46 @@ class TestServiceIdAddressing:
         slugs = []
         for payload in payloads:
             rate = adapter._parse_rate(payload, "stamps_com")
-            assert rate.service_id is not None
-            slugs.append(rate.service_id.slug)
+            assert rate.service_key is not None
+            slugs.append(rate.service_key.slug)
 
-        assert slugs[0] == "shipstation_v1-usps-ground_advantage-package"
-        assert slugs[1] == "shipstation_v1-usps-ground_advantage-thick_envelope"
+        assert slugs[0] == "shipstation_v1-usps-usps_ground_advantage-package"
+        assert slugs[1] == "shipstation_v1-usps-usps_ground_advantage-thick_envelope"
         assert len(set(slugs)) == 2, "packaging was not split; the slugs collided"
         # One serviceCode, so both reduce to the same unqualified service.
         assert len({s.rsplit("-", 1)[0] for s in slugs}) == 1
 
     def test_unqualified_is_not_an_equivalence_claim(self) -> None:
         """Grouping candidates is not the same as declaring them substitutable."""
-        ep = z.ServiceId.build(
-            provider="easypost", carrier="USPS", service="GroundAdvantage"
+        ep = z.ServiceKey.build(
+            provider="shipstation_v2", carrier="USPS", service="usps_ground_advantage"
         )
-        sp = z.ServiceId.build(
-            provider="shippo", carrier="USPS", service="ground_advantage"
+        sp = z.ServiceKey.build(
+            provider="shippo", carrier="USPS", service="usps_ground_advantage"
         )
         assert ep is not None and sp is not None
-        # Different addresses, deliberately.
+        # Different addresses, deliberately, despite the same provider service key.
         assert ep.slug != sp.slug
-        # And shipzil does not currently claim these are the same service: the
-        # provider spellings differ, so the unqualified forms differ too.
-        assert ep.unqualified == "usps-groundadvantage"
-        assert sp.unqualified == "usps-ground_advantage"
+        # The unqualified form is only a grouping hint.
+        assert ep.unqualified == sp.unqualified == "usps-usps_ground_advantage"
 
     def test_no_service_means_no_address(self) -> None:
         """A half-formed address looks usable and is not stable."""
-        assert z.ServiceId.build(provider="easypost", carrier="USPS", service="") is None
-        assert z.ServiceId.build(provider="easypost", carrier="", service="  ") is None
+        assert z.ServiceKey.build(provider="shippo", carrier="USPS", service="") is None
+        assert z.ServiceKey.build(provider="shippo", carrier="", service="  ") is None
 
     def test_slug_is_a_rendering_not_the_storage(self) -> None:
-        sid = z.ServiceId(
-            provider="easypost", carrier="usps", service="groundadvantage"
+        sid = z.ServiceKey(
+            provider="shippo", carrier="usps", service="usps_ground_advantage"
         )
-        assert str(sid) == sid.slug == "easypost-usps-groundadvantage"
+        assert str(sid) == sid.slug == "shippo-usps-usps_ground_advantage"
         # The parts stay addressable, so a later layer can use carrier+service
         # without parsing the slug back apart.
         assert (sid.provider, sid.carrier, sid.service) == (
-            "easypost", "usps", "groundadvantage",
+            "shippo", "usps", "usps_ground_advantage",
         )
 
-    def test_every_adapter_populates_service_id_from_real_payloads(self) -> None:
+    def test_every_adapter_populates_service_key_from_real_payloads(self) -> None:
         """Parsed against captured responses, not constructed by hand."""
         import json
         import pathlib as _p
@@ -1212,8 +1065,8 @@ class TestServiceIdAddressing:
                 continue
             for payload in payloads[:5]:
                 rate = parse(payload)
-                assert rate.service_id is not None, f"{name}: no service_id"
-                assert rate.service_id.slug.startswith(prefix)
+                assert rate.service_key is not None, f"{name}: no service_key"
+                assert rate.service_key.slug.startswith(prefix)
                 # Carrier must be normalised, never a reseller channel.
-                assert rate.service_id.carrier != "stamps_com"
-                assert "®" not in rate.service_id.slug
+                assert rate.service_key.carrier != "stamps_com"
+                assert "®" not in rate.service_key.slug

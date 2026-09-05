@@ -1,13 +1,23 @@
-"""Minimal synchronous HTTP, standard library only.
+"""Synchronous HTTP policy with a replaceable byte transport.
 
-No dependencies is a deliberate choice for a library people are asked to trust
-with label purchases. Everything is synchronous: the industry works
-request/response, and where a provider is genuinely async we poll rather than
-hand the caller a future.
+The default transport uses the standard library. Provider operations are
+request/response; asynchronous label generation is polled with a bounded timeout.
+
+Two layers, so swapping one does not lose the other:
+
+* `Transport` moves bytes and nothing else. Substitute it to add logging, tracing,
+  a proxy, connection pooling, or a recorded cassette.
+* `request()` is policy — retries, backoff, and mapping provider error envelopes
+  onto the shipzil exception hierarchy. It is kept out of the transport so a
+  custom transport still gets correct error handling.
 
 Cloudflare sits in front of at least one provider (Easyship) and rejects default
 Python user-agents with a 403 that looks like an auth failure, so a real
 User-Agent is always sent.
+
+`UrllibTransport` does not pool connections; `urllib` has no keep-alive. It is
+safe to share across threads because it holds no state. Supply a transport backed
+by `requests` or `httpx` if you want pooling.
 """
 
 from __future__ import annotations
@@ -16,9 +26,19 @@ import json as _json
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from .errors import AuthenticationError, ProviderError, RateLimitError, ValidationError
+
+__all__ = [
+    "HttpRequest",
+    "HttpResponse",
+    "Transport",
+    "UrllibTransport",
+    "request",
+]
 
 USER_AGENT = "shipzil/0.1 (+https://shipzil.com)"
 
@@ -26,6 +46,73 @@ USER_AGENT = "shipzil/0.1 (+https://shipzil.com)"
 # retried here: a repeat could buy postage twice, and shipzil offers no
 # idempotency key to make that safe. Purchases pass retries=0.
 _RETRY_STATUSES = frozenset({429, 502, 503, 504})
+
+
+@dataclass(frozen=True)
+class HttpRequest:
+    """One outgoing request, already serialised."""
+
+    method: str
+    url: str
+    headers: Mapping[str, str] = field(default_factory=dict)
+    body: bytes | None = None
+    timeout: float = 60.0
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    """One raw response. Parsing and error mapping happen above the transport."""
+
+    status: int
+    body: bytes
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+
+class Transport(Protocol):
+    """Moves bytes. The seam for logging, tracing, proxies, pooling or replay.
+
+    An implementation returns an `HttpResponse` for any HTTP status, including
+    4xx and 5xx, and raises only for genuine transport failure such as DNS or a
+    connection reset. Interpreting a status is `request()`'s job.
+    """
+
+    def send(self, request: HttpRequest) -> HttpResponse: ...
+
+
+class UrllibTransport:
+    """The default transport: `urllib` from the standard library.
+
+    Stateless, so one instance is safe to share across threads. No connection
+    pooling, because `urllib` offers none.
+    """
+
+    def send(self, request: HttpRequest) -> HttpResponse:
+        req = urllib.request.Request(
+            request.url,
+            data=request.body,
+            headers=dict(request.headers),
+            method=request.method.upper(),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=request.timeout) as resp:
+                return HttpResponse(
+                    status=resp.status,
+                    body=resp.read(),
+                    headers=dict(resp.headers.items()),
+                )
+        except urllib.error.HTTPError as exc:
+            # An HTTP error is still a response: the body usually carries the only
+            # statement of what went wrong.
+            return HttpResponse(
+                status=exc.code,
+                body=exc.read(),
+                headers=dict(exc.headers.items()) if exc.headers else {},
+            )
+
+
+#: Shared default. Stateless, so sharing it costs nothing and avoids allocating
+#: one per adapter call.
+DEFAULT_TRANSPORT: Transport = UrllibTransport()
 
 
 def request(
@@ -39,6 +126,7 @@ def request(
     retries: int = 2,
     backoff: float = 0.6,
     idempotent: bool = False,
+    transport: Transport | None = None,
 ) -> tuple[int, Any]:
     """Perform a request, returning `(status, parsed_body)`.
 
@@ -55,38 +143,43 @@ def request(
         hdrs["Content-Type"] = "application/json"
     hdrs.update(headers or {})
     body = _json.dumps(json).encode() if json is not None else None
+    sender = transport if transport is not None else DEFAULT_TRANSPORT
+    outgoing = HttpRequest(
+        method=method, url=url, headers=hdrs, body=body, timeout=timeout
+    )
 
-    last: Exception | None = None
+    last: Exception | str | None = None
     for attempt in range(retries + 1):
-        req = urllib.request.Request(url, data=body, headers=hdrs, method=method.upper())
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status, _parse(resp.read())
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            parsed = _parse(raw)
-            safe = idempotent or method.upper() in {"GET", "HEAD"}
-            retryable = exc.code in _RETRY_STATUSES or (
-                exc.code == 403 and _is_quota(_describe(parsed))
-            )
-            if retryable and attempt < retries and safe:
-                last = exc
-                time.sleep(_delay(exc, backoff, attempt))
-                continue
-            _raise_for_status(exc.code, parsed, provider)
-        except urllib.error.URLError as exc:
+            response = sender.send(outgoing)
+        except OSError as exc:
+            # Transport-level failure: DNS, refused connection, reset, timeout.
             if attempt < retries:
                 last = exc
                 time.sleep(backoff * (2**attempt))
                 continue
-            raise ProviderError(f"network error: {exc.reason}", provider=provider) from exc
+            raise ProviderError(f"network error: {exc}", provider=provider) from exc
+
+        parsed = _parse(response.body)
+        if 200 <= response.status < 300:
+            return response.status, parsed
+
+        safe = idempotent or method.upper() in {"GET", "HEAD"}
+        retryable = response.status in _RETRY_STATUSES or (
+            response.status == 403 and _is_quota(_describe(parsed))
+        )
+        if retryable and attempt < retries and safe:
+            last = f"HTTP {response.status}"
+            time.sleep(_delay(response, backoff, attempt))
+            continue
+        _raise_for_status(response.status, parsed, provider)
 
     raise ProviderError(f"request failed after {retries + 1} attempts: {last}", provider=provider)
 
 
-def _delay(exc: urllib.error.HTTPError, backoff: float, attempt: int) -> float:
+def _delay(response: HttpResponse, backoff: float, attempt: int) -> float:
     """Honour Retry-After when the server sets it, else exponential backoff."""
-    header = exc.headers.get("Retry-After") if exc.headers else None
+    header = response.headers.get("Retry-After") if response.headers else None
     if header:
         try:
             return min(float(header), 30.0)
@@ -138,7 +231,7 @@ def _raise_for_status(status: int, parsed: Any, provider: str) -> None:
 
 
 def _describe(parsed: Any) -> str:
-    """Pull a usable message out of five different error envelope shapes."""
+    """Extract a message from the supported provider error envelopes."""
     if parsed is None:
         return ""
     if isinstance(parsed, str):
@@ -154,8 +247,7 @@ def _describe(parsed: Any) -> str:
             return "; ".join(p for p in parts if p)[:600]
         if isinstance(err, str):
             return err[:400]
-        # EasyPost: {"error": {"message": ...}} handled above; ShipStation v1:
-        # {"Message": ..., "ModelState": {...}}
+        # ShipStation v1: {"Message": ..., "ModelState": {...}}
         if "Message" in parsed:
             out = str(parsed["Message"])
             state = parsed.get("ModelState")

@@ -1,7 +1,7 @@
 """Unit handling.
 
-Five providers want five conventions: EasyPost takes ounces and inches inline,
-Shippo takes strings with `mass_unit`/`distance_unit`, ShipStation v1 wants
+Four providers want four conventions: Shippo takes strings with
+`mass_unit`/`distance_unit`, ShipStation v1 wants
 `"ounces"`/`"inches"`, v2 wants `"ounce"`/`"inch"`, and Easyship declares
 `kg`/`cm` once per request.
 

@@ -1,4 +1,8 @@
-"""The client callers actually use.
+"""The per-source leaf client. Internal.
+
+`Gateway` is the public entry point; this is the single-provider layer it calls
+once per configured source. It is private because a caller choosing a provider
+by hand is choosing the one thing the gateway exists to abstract.
 
 Responsibilities:
 
@@ -10,10 +14,17 @@ Responsibilities:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from decimal import Decimal
 
-from .errors import CapabilityError, ConfigurationError, SpendLimitExceeded
+from .errors import (
+    AmbiguousPurchaseError,
+    CapabilityError,
+    ConfigurationError,
+    ProviderError,
+    SpendLimitExceeded,
+)
 from .models import Label, Quote, Rate, Shipment
 from .multiparcel import combine_parcel_quotes
 from .providers.base import Adapter
@@ -22,11 +33,7 @@ __all__ = ["Client"]
 
 
 class Client:
-    """A shipping client bound to one provider.
-
-    Multi-provider failover builds on this and is deliberately a later layer;
-    getting one provider honest is the harder half.
-    """
+    """A shipping client bound to one provider. Internal; use `Gateway`."""
 
     def __init__(
         self,
@@ -34,10 +41,12 @@ class Client:
         *,
         max_spend: Decimal | float | str | None = None,
         dry_run: bool = False,
+        max_workers: int | None = None,
     ):
         self.adapter = adapter
         self.dry_run = dry_run
         self.max_spend = Decimal(str(max_spend)) if max_spend is not None else None
+        self.max_workers = max_workers
 
     # ── rating ──────────────────────────────────────────────────────
 
@@ -47,12 +56,16 @@ class Client:
         The caller gets the same shape regardless of whether the provider
         supports multi-parcel; `Quote.strategy` says which path was taken.
         """
+        customs_gap = self.adapter.customs_gap(shipment)
+        if customs_gap is not None:
+            return Quote(excluded=(customs_gap,), via=f"{self.adapter.name}:preflight")
+
         quote = self._rate(shipment)
         # Attached here rather than in each adapter so none can forget them.
         extra = [
             g
             for g in (
-                self.adapter.customs_gap(shipment),
+                self.adapter.eei_gap(shipment),
                 self.adapter.duties_gap(shipment),
                 self.adapter.hazmat_fidelity_gap(shipment),
             )
@@ -67,18 +80,30 @@ class Client:
             return self.adapter.rate_single(shipment)
 
         caps = self.adapter.capabilities
-        if caps.native_multi_parcel or caps.order_resource:
+        if caps.native_multi_parcel:
             return self.adapter.rate_native_multi(shipment)
 
-        # Emulate: rate each parcel alone, then combine.
-        per_parcel = [
-            self.adapter.rate_single(self.adapter._single_parcel_shipment(shipment, parcel))
-            for parcel in shipment.parcels
-        ]
+        # Emulate: rate each parcel alone, then combine. The per-parcel calls are
+        # independent, so they run concurrently — a five-parcel shipment would
+        # otherwise pay five round trips end to end. Results are read back in parcel
+        # order because `combine_parcel_quotes` matches quotes to parcels by
+        # position, and a rate belonging to the wrong parcel would be silently
+        # mispriced rather than obviously broken.
+        parcels = shipment.parcels
+        legs = [self.adapter.single_parcel_shipment(shipment, parcel) for parcel in parcels]
+        if len(legs) == 1:  # pragma: no cover - is_multi_parcel guarantees > 1
+            per_parcel = [self.adapter.rate_single(legs[0])]
+        else:
+            workers = self.max_workers or len(legs)
+            with ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="shipzil-parcel"
+            ) as pool:
+                per_parcel = list(pool.map(self.adapter.rate_single, legs))
+
         return combine_parcel_quotes(
             per_parcel,
             provider=self.adapter.name,
-            via=f"{self.adapter.name}:fanoutx{len(shipment.parcels)}",
+            via=f"{self.adapter.name}:fanoutx{len(parcels)}",
         )
 
     # ── buying ──────────────────────────────────────────────────────
@@ -93,6 +118,11 @@ class Client:
         Guardrails run before any network call, so a dry run or a spend-limit
         breach costs nothing.
         """
+        if self.max_spend is not None and rate.currency is None:
+            raise ConfigurationError(
+                "max_spend cannot be enforced because this rate has no currency",
+                provider=self.adapter.name,
+            )
         if self.max_spend is not None and rate.amount > self.max_spend:
             raise SpendLimitExceeded(
                 f"rate {rate.amount} exceeds max_spend {self.max_spend}",
@@ -123,13 +153,17 @@ class Client:
                 raw={"dry_run": True, "rate": rate.raw},
             )
 
-        return self.adapter.buy(shipment, rate)
+        try:
+            return self.adapter.buy(shipment, rate)
+        except ProviderError as error:
+            raise AmbiguousPurchaseError(
+                "the purchase request failed after dispatch and may have succeeded; "
+                "reconcile with the provider before trying again",
+                provider=self.adapter.name,
+                messages=error.messages,
+            ) from error
 
     def void(self, label: Label) -> bool:
         if self.dry_run:
             return True
         return self.adapter.void(label)
-
-
-def _unused(*_: object) -> None:  # pragma: no cover
-    raise ConfigurationError("unreachable")
