@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "python:generate": "uv run --project .. --with ./node_modules/fumadocs-python fumapy-generate shipzil --dir generated && node scripts/generate-python-api.mjs",
+    "python:generate": "node -e \"require('fs').mkdirSync('generated',{recursive:true})\" && uv run --project .. --with ./node_modules/fumadocs-python fumapy-generate shipzil --dir generated && node scripts/generate-python-api.mjs",
     "predev": "npm run python:generate",
     "prebuild": "npm run python:generate",
     "pretypes:check": "npm run python:generate",
