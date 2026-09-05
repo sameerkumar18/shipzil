@@ -3,10 +3,14 @@ title: Quickstart
 description: Configure sources, request rates and buy a label.
 ---
 
-No release tag or PyPI package exists yet, so pin a commit or work from a clone.
+```bash
+uv add git+https://github.com/sameerkumar18/shipzil.git
+```
+
+Or with pip:
 
 ```bash
-uv sync
+pip install git+https://github.com/sameerkumar18/shipzil.git
 ```
 
 ## Configure sources

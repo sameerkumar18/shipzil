@@ -182,14 +182,20 @@ See [Concepts](https://sameerkumar18.github.io/shipzil/docs/concepts/) and
 
 ## Install
 
-> **Alpha, and not yet tagged.** No release tag or PyPI package exists, so pin a
-> commit rather than a version. The API can still change.
-
-Pin an exact commit:
+```bash
+uv add git+https://github.com/sameerkumar18/shipzil.git
+```
 
 ```bash
-uv add "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
-pip install "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
+pip install git+https://github.com/sameerkumar18/shipzil.git
+```
+
+Nothing else is pulled in. `pip list` shows only `shipzil`.
+
+Pin a commit or tag when you want a fixed version:
+
+```bash
+uv add git+https://github.com/sameerkumar18/shipzil.git@<commit-or-tag>
 ```
 
 Or work from a clone:
@@ -201,9 +207,7 @@ uv sync
 uv run python examples/gateway.py
 ```
 
-`uv add "shipzil @ git+...@<tag>"` will work once the first tag is published. A git
-dependency cannot be used by a package you publish to PyPI; that needs shipzil on
-PyPI, which is on the [roadmap](https://sameerkumar18.github.io/shipzil/docs/roadmap/).
+> **Alpha.** The API can still change between commits.
 
 ## Development
 

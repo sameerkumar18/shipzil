@@ -11,9 +11,9 @@ There is no hosted shipzil service or per-label fee.
 The phrase describes the product category; shipzil is not affiliated with
 OpenRouter.
 
-!!! warning "Alpha, and not yet tagged"
-    No release tag or PyPI package exists yet, so pin a commit rather than a
-    version. The interface may change before the first release.
+!!! warning "Alpha"
+    The interface may change between commits. Pin a commit or tag for a fixed
+    version.
 
 ## Start here
 
@@ -75,10 +75,11 @@ make check
 make docs
 ```
 
-Until the first tag exists, pin an exact commit:
+Install it into an application:
 
 ```bash
-uv add "shipzil @ git+https://github.com/sameerkumar18/shipzil@<commit-sha>"
+uv add git+https://github.com/sameerkumar18/shipzil.git
+pip install git+https://github.com/sameerkumar18/shipzil.git
 ```
 
 ## Documentation

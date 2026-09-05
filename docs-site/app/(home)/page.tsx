@@ -187,10 +187,10 @@ export default async function HomePage() {
 
           <div className="mt-10 rounded-lg border border-amber-500/30 bg-amber-500/5 px-5 py-4">
             <p className="text-sm">
-              <strong className="font-medium">Alpha, and not yet tagged.</strong>{' '}
+              <strong className="font-medium">Alpha.</strong>{' '}
               <span className="text-fd-muted-foreground">
-                No release tag or PyPI package exists yet, so pin a commit. The
-                interface can still change. See the{' '}
+                The interface can still change between commits. Pin a commit or tag
+                for a fixed version. See the{' '}
                 <Link href="/docs/roadmap" className="underline underline-offset-4">
                   roadmap
                 </Link>{' '}
