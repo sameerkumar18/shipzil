@@ -1,0 +1,37 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+@import 'fumadocs-python/preset.css';
+
+/* Brand: indigo through cyan, matching the gateway mark. Set on both themes so
+   links, the active nav item and focus rings all read as one brand rather than
+   Fumadocs' default neutral. */
+:root {
+  --color-fd-primary: #4338ca;
+  --color-fd-ring: #4338ca;
+  --brand-from: #4338ca;
+  --brand-to: #06b6d4;
+}
+
+.dark {
+  /* Indigo-600 is too dark to read on a dark surface; lift it toward periwinkle. */
+  --color-fd-primary: #a5b4fc;
+  --color-fd-ring: #818cf8;
+  --brand-from: #818cf8;
+  --brand-to: #22d3ee;
+}
+
+.brand-gradient-text {
+  background-image: linear-gradient(100deg, var(--brand-from), var(--brand-to));
+  background-clip: text;
+  color: transparent;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
