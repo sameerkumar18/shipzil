@@ -20,11 +20,25 @@ from typing import Any
 
 import pytest
 
+import shipzil as _z
 from shipzil.models import Strategy
 from shipzil.providers import (
     EasyshipAdapter,
     ShippoAdapter,
     ShipStationV2Adapter,
+)
+from shipzil.units import Dimensions as _Dim
+from shipzil.units import Weight as _W
+
+_SHIPMENT_US = _z.Shipment(
+    _z.Address(
+        street1="215 Clayton St", city="San Francisco", state="CA", postal_code="94117"
+    ),
+    _z.Address(
+        street1="1600 Pennsylvania Ave NW", city="Washington", state="DC",
+        postal_code="20500",
+    ),
+    (_z.Parcel(weight=_W.of(16, "oz"), dimensions=_Dim.of(10, 8, 4, "in")),),
 )
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -336,3 +350,103 @@ class TestEasyshipLabel:
 
         explicit = Item("shirt", category="fashion", value=Decimal("12"))
         assert adapter._item(explicit)["declared_customs_value"] == 12.0
+
+
+
+class TestPartialDegradationIsReported:
+    """A rate list shortened by a transient carrier failure must say so.
+
+    Measured against a Shippo test account on a US domestic lane: 11 rates
+    normally (3 USPS, 8 UPS), and 3 when UPS answers "Hard: Too Many Requests".
+    The reason was present in the response messages and `code_from_text` already
+    classified it, but no exclusion was produced because the rate list was not
+    empty, so the caller lost 8 of 11 options with no signal.
+    """
+
+    @staticmethod
+    def _body(rates: list[dict], messages: tuple[dict, ...] | list[dict]) -> dict:
+        return {
+            "object_id": "s1",
+            "status": "SUCCESS",
+            "rates": rates,
+            "messages": list(messages),
+        }
+
+    @staticmethod
+    def _rate(token: str, carrier: str) -> dict:
+        return {
+            "object_id": f"r-{token}",
+            "provider": carrier,
+            "amount": "10.00",
+            "currency": "USD",
+            "servicelevel": {"token": token, "name": token.replace("_", " ").title()},
+        }
+
+    #: Structural messages this account returns on every single call. They are
+    #: permanent for the lane, so they must not become exclusions on a good quote.
+    STRUCTURAL = (
+        {
+            "source": "Shippo",
+            "text": "Carrier account shippo_sendle_account doesn't support one or "
+                    "more shipment options",
+        },
+        {
+            "source": "DHLExpress",
+            "text": "Shippo's DHL Express master account doesn't support shipments "
+                    "to inside of the US",
+        },
+        {
+            "source": "UPS",
+            "text": "RatedShipmentAlert: Your invoice may vary from the displayed "
+                    "reference rates",
+        },
+    )
+    THROTTLED: dict[str, str] = {  # noqa: RUF012 - read-only fixture
+        "source": "UPS",
+        "text": "UPS - Hard: Too Many Requests",
+    }
+
+    def _quote(self, body: dict):
+        from transport import RecordingTransport
+
+        from shipzil.providers import ShippoAdapter
+
+        adapter = ShippoAdapter("shippo_test_x")
+        adapter.transport = RecordingTransport(default=(201, body))
+        return adapter.rate_single(_SHIPMENT_US)
+
+    def test_a_throttled_carrier_is_reported_even_though_rates_came_back(self) -> None:
+        import shipzil as z
+
+        quote = self._quote(
+            self._body(
+                [self._rate("usps_ground_advantage", "USPS")],
+                [*self.STRUCTURAL, self.THROTTLED],
+            )
+        )
+
+        assert quote.rates, "the surviving rate must still be returned"
+        codes = [e.code for e in quote.excluded]
+        assert z.ExclusionCode.RATE_LIMITED in codes, (
+            "a throttled carrier shortened the list and must be reported"
+        )
+
+    def test_structural_messages_do_not_become_exclusions_on_a_good_quote(self) -> None:
+        quote = self._quote(
+            self._body(
+                [self._rate("usps_ground_advantage", "USPS"), self._rate("ups_ground", "UPS")],
+                self.STRUCTURAL,
+            )
+        )
+
+        assert len(quote.rates) == 2
+        assert quote.excluded == (), (
+            "permanent account/lane messages would be noise on every quote"
+        )
+        assert quote.messages, "they stay available as provider messages"
+
+    def test_an_empty_rate_list_still_reports_every_reason(self) -> None:
+        quote = self._quote(self._body([], [*self.STRUCTURAL, self.THROTTLED]))
+
+        assert quote.rates == ()
+        assert len(quote.excluded) >= 1

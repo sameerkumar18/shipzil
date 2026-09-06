@@ -45,9 +45,28 @@ for exclusion in quote.excluded:
 The code may be inferred from provider prose. `source` records where the failure
 originated, not whether the normalized code was structured or inferred.
 
-shipzil reports rates it removes through local carrier or service filters. It also
-retains exclusions supplied by providers. It cannot report a service that a
-provider silently omitted.
+shipzil reports rates it removes through local carrier or service filters, and
+retains exclusions supplied by providers.
+
+It also reports a rate list shortened by a transient carrier failure. A provider
+can return some rates while one carrier is rate limited, which would otherwise look
+like a normal result. That case arrives as `RATE_LIMITED` alongside the rates that
+did come back:
+
+```python
+quote = gateway.get_rates(shipment)
+
+if any(e.code is z.ExclusionCode.RATE_LIMITED for e in quote.excluded):
+    # Fewer services than usual. Retrying later may return more.
+    log.info("rate list may be incomplete: %s", quote.explain())
+```
+
+Permanent account and lane messages are not promoted to exclusions, because they
+are true on every call for that account and would bury the transient case. They
+remain available in `quote.messages`.
+
+shipzil cannot report a service a provider omits with no message at all. Detecting
+that needs a baseline of what the account usually returns.
 
 ### Exclusion codes
 

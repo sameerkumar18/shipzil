@@ -113,9 +113,10 @@ class ShippoAdapter(Adapter):
         messages = [_message_text(m) for m in (body.get("messages") or [])]
         messages = [m for m in messages if m]
 
+        raw_messages = body.get("messages") or []
         excluded: tuple[Exclusion, ...] = ()
         if not rates:
-            excluded = tuple(self._exclusions(body.get("messages") or []))
+            excluded = tuple(self._exclusions(raw_messages))
             if not excluded:
                 excluded = (
                     Exclusion(
@@ -127,6 +128,22 @@ class ShippoAdapter(Adapter):
                         source="shipzil",
                     ),
                 )
+        else:
+            # Rates came back, but a transient carrier failure can still have
+            # removed services from the list. Measured against this account:
+            # a US domestic lane returns 11 rates (3 USPS, 8 UPS) normally and 3
+            # when UPS answers "Hard: Too Many Requests", so a caller could lose
+            # 8 of 11 options with no signal at all.
+            #
+            # Only transient codes are promoted here. A structural message such as
+            # "carrier account doesn't support one or more shipment options" is
+            # permanent for this account and lane, so raising it on every quote
+            # would bury the transient case in nine lines of noise.
+            excluded = tuple(
+                exclusion
+                for exclusion in self._exclusions(raw_messages)
+                if exclusion.code is ExclusionCode.RATE_LIMITED
+            )
         return Quote(
             rates=rates,
             excluded=excluded,

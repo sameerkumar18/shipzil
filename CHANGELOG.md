@@ -35,6 +35,14 @@ Unreleased.
 
 ### Fixed
 
+- A rate list shortened by a transient carrier failure is now reported. Measured
+  against a Shippo test account on a US domestic lane, a rating call returns 11
+  rates normally and 3 when UPS answers "Hard: Too Many Requests". The reason was
+  present in the response messages and already classifiable, but no exclusion was
+  produced because the list was not empty, so a caller could lose 8 of 11 options
+  with no signal. Structural account and lane messages are still not promoted;
+  they are permanent and would be noise on every quote.
+
 - Carrier family filters now match variants such as DHL Express and DHL eCommerce
   without matching unrelated carriers.
 - Rates removed by shipzil filters return an exclusion instead of disappearing.
