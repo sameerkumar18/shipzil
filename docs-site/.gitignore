@@ -5,6 +5,9 @@
 .source
 /generated
 /content/docs/api
+# a stray fumapy snapshot written outside generated/ was committed once;
+# it embeds absolute local paths, so keep it out by name too
+/shipzil.json
 
 # test & build
 /coverage
