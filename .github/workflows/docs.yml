@@ -32,7 +32,7 @@ jobs:
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
       # setup-uv publishes no moving major tag, so this is pinned exactly.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
       - run: npm ci
