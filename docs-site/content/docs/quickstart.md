@@ -4,13 +4,13 @@ description: Configure sources, request rates and buy a label.
 ---
 
 ```bash
-uv add git+https://github.com/sameerkumar18/shipzil.git
+uv add shipzil
 ```
 
 Or with pip:
 
 ```bash
-pip install git+https://github.com/sameerkumar18/shipzil.git
+pip install shipzil
 ```
 
 ## Configure sources

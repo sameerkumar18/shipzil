@@ -12,8 +12,8 @@ The phrase describes the product category; shipzil is not affiliated with
 OpenRouter.
 
 !!! warning "Alpha"
-    The interface may change between commits. Pin a commit or tag for a fixed
-    version.
+    0.1.0 is published, and the interface may change before 1.0. Pin a version in
+    your lockfile.
 
 ## Start here
 
@@ -78,8 +78,14 @@ make docs
 Install it into an application:
 
 ```bash
+uv add shipzil
+pip install shipzil
+```
+
+To track unreleased work, install from git:
+
+```bash
 uv add git+https://github.com/sameerkumar18/shipzil.git
-pip install git+https://github.com/sameerkumar18/shipzil.git
 ```
 
 ## Documentation

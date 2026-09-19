@@ -3,7 +3,7 @@ title: Providers
 description: Supported operations, adapter behavior and verification status.
 ---
 
-The unreleased working tree contains four provider adapters.
+shipzil 0.1.0 contains four provider adapters.
 
 ## Support matrix
 

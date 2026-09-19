@@ -12,7 +12,7 @@ Bring your own provider accounts. Keep your contracts and negotiated rates.
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%20–%203.14-4338ca?style=flat-square)](https://www.python.org/downloads/)
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-06b6d4?style=flat-square)](#install)
-[![Status](https://img.shields.io/badge/status-alpha%2C%20untagged-f59e0b?style=flat-square)](#install)
+[![PyPI](https://img.shields.io/pypi/v/shipzil?style=flat-square&color=4338ca)](https://pypi.org/project/shipzil/)
 
 </div>
 
@@ -183,19 +183,19 @@ See [Concepts](https://sameerkumar18.github.io/shipzil/docs/concepts/) and
 ## Install
 
 ```bash
-uv add git+https://github.com/sameerkumar18/shipzil.git
+uv add shipzil
 ```
 
 ```bash
-pip install git+https://github.com/sameerkumar18/shipzil.git
+pip install shipzil
 ```
 
 Nothing else is pulled in. `pip list` shows only `shipzil`.
 
-Pin a commit or tag when you want a fixed version:
+To track unreleased work, install from git:
 
 ```bash
-uv add git+https://github.com/sameerkumar18/shipzil.git@<commit-or-tag>
+uv add git+https://github.com/sameerkumar18/shipzil.git
 ```
 
 Or work from a clone:
@@ -207,7 +207,8 @@ uv sync
 uv run python examples/gateway.py
 ```
 
-> **Alpha.** The API can still change between commits.
+> **Alpha.** The interface may change before 1.0. See the
+> [changelog](CHANGELOG.md) for what changed in each release.
 
 ## Development
 
