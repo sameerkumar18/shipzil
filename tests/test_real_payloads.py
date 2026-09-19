@@ -44,6 +44,18 @@ _SHIPMENT_US = _z.Shipment(
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 
+def _domestic_shipment():
+    """A minimal rateable US domestic shipment, for adapter-level tests."""
+    from shipzil.models import Address, Parcel, Shipment
+    from shipzil.units import Dimensions, Weight
+
+    return Shipment(
+        Address(street1="215 Clayton St", city="San Francisco", state="CA", postal_code="94117"),
+        Address(street1="1 Rockefeller Plaza", city="New York", state="NY", postal_code="10020"),
+        (Parcel(weight=Weight.of(16, "oz"), dimensions=Dimensions.of(10, 8, 4, "in")),),
+    )
+
+
 def load(name: str) -> Any:
     return json.loads((FIXTURES / name).read_text())
 
@@ -450,3 +462,81 @@ class TestPartialDegradationIsReported:
 
         assert quote.rates == ()
         assert len(quote.excluded) >= 1
+
+
+class TestPartialDegradationAcrossAdapters:
+    """A shortened rate list must be explained by every adapter that can explain it.
+
+    Shippo needed a fix for this; the other three were checked rather than assumed:
+
+    * ShipStation v2 reports `errors` and `invalid_rates` unconditionally.
+    * ShipStation v1 rates one carrier per call and collects each carrier's failure
+      while keeping the rates other carriers returned.
+    * Easyship cannot. Its rate response carries only `meta` and `rates`, with no
+      per-courier failure field, so a shortfall is indistinguishable from a normal
+      result. Nothing is invented here.
+    """
+
+    def test_shipstation_v2_reports_errors_alongside_returned_rates(self) -> None:
+        from transport import RecordingTransport
+
+        from shipzil.models import ExclusionCode
+        from shipzil.providers import ShipStationV2Adapter
+
+        body = {
+            "rate_response": {
+                "rates": [
+                    {
+                        "carrier_code": "stamps_com",
+                        "service_code": "usps_ground_advantage",
+                        "service_type": "USPS Ground Advantage",
+                        "shipping_amount": {"amount": 8.11, "currency": "usd"},
+                        "other_amount": {"amount": 0, "currency": "usd"},
+                        "insurance_amount": {"amount": 0, "currency": "usd"},
+                    }
+                ],
+                "errors": [
+                    {
+                        "error_code": "rate_limit_exceeded",
+                        "message": "ups is throttled, try again shortly",
+                        "carrier_code": "ups",
+                    }
+                ],
+            }
+        }
+        adapter = ShipStationV2Adapter("k")
+        adapter.transport = RecordingTransport(default=(200, body))
+
+        quote = adapter.rate_single(_domestic_shipment())
+
+        assert len(quote.rates) == 1, "the good rate must survive"
+        codes = [e.code for e in quote.excluded]
+        assert ExclusionCode.RATE_LIMITED in codes, codes
+        assert any(e.carrier == "ups" for e in quote.excluded)
+
+    def test_shipstation_v1_keeps_rates_when_one_carrier_fails(self) -> None:
+        from shipzil.errors import ProviderError
+        from shipzil.providers import ShipStationV1Adapter
+
+        adapter = ShipStationV1Adapter("k", "s", carriers=("stamps_com", "ups"))
+        calls: list[str] = []
+
+        def fake_rates(code: str, shipment: object) -> list[object]:
+            calls.append(code)
+            if code == "ups":
+                raise ProviderError("ups account is not configured", provider="shipstation_v1")
+            rows = load("ss1_rates_single.json")
+            return [adapter._parse_rate(row, code) for row in rows]
+
+        adapter._rates_for_carrier = fake_rates  # type: ignore[assignment]
+        quote = adapter.rate_single(_domestic_shipment())
+
+        assert calls == ["stamps_com", "ups"]
+        assert quote.rates, "stamps_com rates must not be discarded by the ups failure"
+        assert any(e.carrier == "ups" for e in quote.excluded)
+
+    def test_easyship_response_carries_no_failure_field_to_report(self) -> None:
+        """Documents why Easyship has no equivalent, so nobody adds a fake one."""
+        payload = load("es_rates_single.json")
+        assert set(payload) == {"meta", "rates"}
+        assert set(payload["meta"]) <= {"pagination", "request_id"}

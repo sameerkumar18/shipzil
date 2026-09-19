@@ -60,6 +60,12 @@ gateway = z.Gateway({
 ### Shippo
 
 - Test tokens start with `shippo_test_`; live purchase tests reject other tokens.
+- The test environment is inconsistent about refunds. A label refunded immediately
+  after purchase has returned HTTP 201 with `status: "ERROR"` and no reason, as well
+  as an accepted refund. `void()` raises on a refusal rather than returning `False`,
+  so an unexplained rejection is not mistaken for success.
+- A rate list shortened by a throttled carrier is reported as `RATE_LIMITED`
+  alongside the rates that did return.
 - The adapter uses the shipment endpoint for rating and the transaction endpoint
   for purchase.
 - Provider messages are preserved in `quote.messages` and normalized to exclusions
@@ -77,6 +83,9 @@ gateway = z.Gateway({
   or stored SKU data.
 - Customs values are sent per unit.
 - Label purchase requires `company` on both addresses, although rating does not.
+- The rate response carries only `meta` and `rates`, with no per-courier failure
+  field, so a shortened rate list cannot be explained. shipzil does not invent a
+  reason for it.
 
 ### ShipStation v1
 

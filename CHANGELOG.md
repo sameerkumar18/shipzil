@@ -20,6 +20,17 @@ Unreleased.
 
 ### Changed
 
+- `get_rates(sources=...)` selects configured source names; `providers=` now selects
+  adapter types only. The single overloaded argument matched either, which hid a
+  caller's typo as an empty result. An unknown name in either raises
+  `ConfigurationError`.
+- `max_spend` accepts `max_spend_currency`. A rate with no currency, or one in a
+  different currency, is refused rather than compared, because shipzil does not
+  convert money.
+- Removed `Label.parcel_labels` and `TrackingLeg.piece`. No adapter populated
+  either, and a documented field that is always empty is a promise the library does
+  not keep.
+
 - Minimum Python version is 3.10.
 - `Gateway` is the caller entry point; the single-source client is internal.
 - `Rate` and `Label` constructors are keyword-only.
@@ -51,6 +62,13 @@ Unreleased.
   with current source and provider schemas.
 
 ### Verified
+
+- Live rating now covers all four adapters. Easyship runs against its sandbox host;
+  ShipStation v1 rating is read-only and confirmed live that it returns no currency
+  and no delivery estimate.
+- Partial-shortfall reporting was checked in every adapter rather than assumed:
+  ShipStation v2 and v1 already reported failures alongside returned rates, and
+  Easyship's response carries no failure field to report.
 
 - Offline tests cover all four adapters with sanitized responses and payload
   assertions.

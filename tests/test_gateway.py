@@ -487,3 +487,84 @@ class TestPerParcelFanOutIsConcurrent:
         assert elapsed < (delay * 4) * 0.75, (
             f"{elapsed:.3f}s for 4 parcels at {delay}s each looks serial"
         )
+
+
+class TestSourceAndProviderFiltersAreSeparate:
+    """`sources=` selects the names you chose; `providers=` selects adapter types.
+
+    They were one overloaded argument, which is ambiguous as soon as a source name
+    differs from its provider name, and silently matched either.
+    """
+
+    def _gateway(self) -> z.Gateway:
+        return z.Gateway({
+            "primary": StubAdapter("shippo", (rate("shippo", "usps", "ground", "10"),)),
+            "backup": StubAdapter("shippo", (rate("shippo", "usps", "priority", "12"),)),
+            "intl": StubAdapter("easyship", (rate("easyship", "fedex", "intl", "30"),)),
+        })
+
+    def test_sources_selects_by_configured_name(self) -> None:
+        result = self._gateway().get_rates(SHIPMENT, sources={"backup"})
+        assert [r.source for r in result.rates] == ["backup"]
+
+    def test_providers_selects_every_source_of_that_adapter(self) -> None:
+        result = self._gateway().get_rates(SHIPMENT, providers={"shippo"})
+        assert [r.source for r in result.rates] == ["primary", "backup"]
+
+    def test_both_filters_intersect(self) -> None:
+        result = self._gateway().get_rates(
+            SHIPMENT, sources={"primary", "intl"}, providers={"shippo"}
+        )
+        assert [r.source for r in result.rates] == ["primary"]
+
+    def test_an_unknown_source_is_an_error_not_an_empty_result(self) -> None:
+        with pytest.raises(z.ConfigurationError, match="unknown source"):
+            self._gateway().get_rates(SHIPMENT, sources={"typo"})
+
+    def test_an_unknown_provider_is_an_error_not_an_empty_result(self) -> None:
+        with pytest.raises(z.ConfigurationError, match="unknown provider"):
+            self._gateway().get_rates(SHIPMENT, providers={"fedex"})
+
+    def test_a_source_name_is_no_longer_matched_by_the_provider_filter(self) -> None:
+        """The old behaviour accepted either, which hid a caller's mistake."""
+        with pytest.raises(z.ConfigurationError, match="unknown provider"):
+            self._gateway().get_rates(SHIPMENT, providers={"primary"})
+
+
+class TestMaxSpendIsCurrencyAware:
+    """A numeric ceiling cannot be compared across currencies, and shipzil does not
+    convert money, so it refuses instead of guessing."""
+
+    @staticmethod
+    def _rate(currency: str | None, amount: str = "10") -> z.Rate:
+        return z.Rate(
+            carrier="usps",
+            service="ground",
+            amount=Decimal(amount),
+            currency=currency,
+            provider="shippo",
+            source="s",
+            service_key=ServiceKey.build(provider="shippo", carrier="usps", service="ground"),
+        )
+
+    def _gateway(self, **kw: object) -> z.Gateway:
+        return z.Gateway({"s": StubAdapter("shippo")}, **kw)  # type: ignore[arg-type]
+
+    def test_a_rate_with_no_currency_cannot_be_checked(self) -> None:
+        gateway = self._gateway(max_spend="25")
+        with pytest.raises(z.ConfigurationError, match="no currency"):
+            gateway.buy(SHIPMENT, self._rate(None))
+
+    def test_a_different_currency_is_refused_rather_than_compared(self) -> None:
+        gateway = self._gateway(max_spend="25", max_spend_currency="USD")
+        with pytest.raises(z.ConfigurationError, match="does not convert currency"):
+            gateway.buy(SHIPMENT, self._rate("EUR"))
+
+    def test_the_matching_currency_is_enforced_normally(self) -> None:
+        gateway = self._gateway(max_spend="5", max_spend_currency="USD")
+        with pytest.raises(z.SpendLimitExceeded):
+            gateway.buy(SHIPMENT, self._rate("USD", "10"))
+
+    def test_max_spend_currency_without_max_spend_is_rejected(self) -> None:
+        with pytest.raises(z.ConfigurationError, match="needs max_spend"):
+            self._gateway(max_spend_currency="USD")

@@ -46,9 +46,15 @@ The first source with a matching rate wins. Lower-ranked sources are not called
 after that. This is caller-defined policy; shipzil does not evaluate provider
 health.
 
-`providers=` currently matches either a source name or an adapter name. A separate
-`sources=` filter is planned because the current behavior is ambiguous when those
-names differ.
+`sources=` selects by the names you configured. `providers=` selects by adapter
+type, so it matches every source using that provider. They are separate arguments
+because one does not imply the other, and an unknown name in either raises
+`ConfigurationError` rather than returning an empty result:
+
+```python
+quote = gateway.get_rates(shipment, sources={"shippo-eu"})
+quote = gateway.get_rates(shipment, providers={"shippo"})
+```
 
 ## Filters
 

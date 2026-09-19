@@ -15,8 +15,8 @@ Provider behavior changes. This page distinguishes three evidence levels:
 | Adapter | Rating | Purchase | Cancel/refund | Customs basis |
 |---|---|---|---|---|
 | Shippo | live and captured | live test purchase | live refund request | specification: line total |
-| Easyship | captured sandbox response | captured sandbox label response | payload/response tests | specification: per unit |
-| ShipStation v1 | captured response | captured `testLabel` response | payload/response tests | specification: USD line total |
+| Easyship | **live sandbox** and captured | captured sandbox label response | payload/response tests | specification: per unit |
+| ShipStation v1 | **live** and captured | captured `testLabel` response | payload/response tests | specification: USD line total |
 | ShipStation v2 | live and captured | implementation and captured schema; not run live | implementation and captured schema; not run live | specification: per unit |
 
 Two-source rating has been run live with Shippo and ShipStation v2. The test checks
@@ -40,8 +40,11 @@ response structure without credentials or contact details.
 ## Known evidence gaps
 
 - ShipStation v2 purchase and void have not been run live in this repository.
-- Easyship and ShipStation v1 do not have current live test markers; their retained
-  evidence is captured and specification based.
+- Easyship and ShipStation v1 purchase paths have no live test. Their rating paths
+  are now exercised live; purchases remain captured and specification based.
+- Shippo's test environment is inconsistent about refunds. It has returned both an
+  accepted refund and HTTP 201 carrying `status: "ERROR"` with no reason, so the
+  live test accepts either and requires the refusal to be attributable.
 - ShipStation v1 `testLabel` no-charge behavior was observed for one
   Stamps.com/USPS label. It is not generalized to every connected carrier.
 - Provider omissions cannot be distinguished from unsupported services unless the

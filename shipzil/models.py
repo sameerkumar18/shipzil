@@ -205,7 +205,8 @@ class TrackingLeg:
     1. **Legs.** An international shipment handed from one courier to another
        starts a new leg with its own number (Easyship `trackings[].leg_number`).
     2. **Pieces.** A multi-piece shipment has a master number plus one per piece
-       (ShipEngine `packages[].tracking_number`; UPS allows up to 20).
+       (ShipEngine `packages[].tracking_number`; UPS allows up to 20). Current
+       adapters return the legs they receive without a per-piece index.
     3. **Network handoff.** Ground Saver and similar keep one number across two
        networks.
     4. **Aliases.** DHL eCommerce adds `local` and `alternate` numbers for the
@@ -219,8 +220,6 @@ class TrackingLeg:
     leg_number: int = 1
     #: The carrier actually moving the parcel on this leg.
     handler: str | None = None
-    #: Position within a multi-piece shipment, when applicable.
-    piece: int | None = None
     #: Carrier-internal aliases for the same movement.
     local_tracking_number: str | None = None
     alternate_tracking_number: str | None = None
@@ -650,10 +649,8 @@ class Label:
     is_test: bool | None = None
     #: Every tracking number this purchase produced. `tracking_number` is the
     #: first leg; this is the whole set, including later legs after a courier
-    #: handoff and per-piece numbers in a multi-piece shipment.
+    #: handoff and per-piece numbers a provider returns.
     tracking_legs: tuple[TrackingLeg, ...] = ()
-    #: Reserved for per-parcel output; current adapters do not populate it.
-    parcel_labels: tuple[Label, ...] = ()
     raw: Any = None
     #: Configured source/account that bought this label, when a Gateway bought it.
     source: str | None = None

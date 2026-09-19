@@ -167,6 +167,8 @@ class Gateway:
     fallback: tuple[str, ...] | None
     #: Refuse to buy a rate above this. Checked before any network call.
     max_spend: Decimal | float | str | None
+    #: Currency `max_spend` is expressed in, when set.
+    max_spend_currency: str | None
     #: Return a synthetic label instead of contacting a purchase endpoint.
     dry_run: bool
     #: Upper bound on concurrent source calls. None means one worker per source.
@@ -178,6 +180,7 @@ class Gateway:
         *,
         fallback: Sequence[str] | None = None,
         max_spend: Decimal | float | str | None = None,
+        max_spend_currency: str | None = None,
         dry_run: bool = False,
         max_workers: int | None = None,
         **credentials: str | Sequence[str],
@@ -193,6 +196,11 @@ class Gateway:
             raise ConfigurationError("Gateway source names cannot be empty")
         self.fallback = tuple(fallback) if fallback is not None else None
         self.max_spend = max_spend
+        self.max_spend_currency = (
+            max_spend_currency.upper() if max_spend_currency else None
+        )
+        if max_spend is None and max_spend_currency is not None:
+            raise ConfigurationError("max_spend_currency needs max_spend")
         self.dry_run = dry_run
         if max_workers is not None and max_workers < 1:
             raise ConfigurationError("max_workers must be at least 1")
@@ -250,25 +258,55 @@ class Gateway:
         if len(set(self.fallback)) != len(self.fallback):
             raise ConfigurationError("Gateway fallback sources must be unique")
 
-    def _eligible_sources(self, providers: Iterable[str] | None) -> list[str]:
-        if providers is None:
-            allowed = None
-        else:
-            allowed = {provider.strip().lower() for provider in providers}
+    def _eligible_sources(
+        self,
+        sources: Iterable[str] | None,
+        providers: Iterable[str] | None,
+    ) -> list[str]:
+        """Select configured sources by source name, provider type, or both.
+
+        `sources` matches the names you chose. `providers` matches adapter types.
+        They are separate because one does not imply the other: two sources can
+        share a provider, and a source name need not resemble its provider.
+        """
+        wanted_sources = (
+            {name.strip() for name in sources} if sources is not None else None
+        )
+        if wanted_sources is not None:
+            unknown = sorted(wanted_sources - set(self.sources))
+            if unknown:
+                raise ConfigurationError(
+                    f"unknown source(s): {', '.join(unknown)}. "
+                    f"Configured: {', '.join(sorted(self.sources))}"
+                )
+
+        wanted_providers = (
+            {p.strip().lower() for p in providers} if providers is not None else None
+        )
+        if wanted_providers is not None:
+            configured = {a.name.lower() for a in self.sources.values()}
+            unknown_p = sorted(wanted_providers - configured)
+            if unknown_p:
+                raise ConfigurationError(
+                    f"unknown provider(s): {', '.join(unknown_p)}. "
+                    f"Configured: {', '.join(sorted(configured))}"
+                )
 
         names = list(self.fallback) if self.fallback is not None else list(self.sources)
         out = []
         for name in names:
-            adapter = self.sources[name]
+            if wanted_sources is not None and name not in wanted_sources:
+                continue
             if (
-                allowed is not None
-                and name.lower() not in allowed
-                and adapter.name.lower() not in allowed
+                wanted_providers is not None
+                and self.sources[name].name.lower() not in wanted_providers
             ):
                 continue
             out.append(name)
         if not out:
-            raise ConfigurationError("provider selection does not match any configured source")
+            raise ConfigurationError(
+                "source and provider selection does not match any configured source"
+            )
         return out
 
     def _validate_services(
@@ -394,6 +432,7 @@ class Gateway:
         client = Client(
             adapter,
             max_spend=self.max_spend,
+            max_spend_currency=self.max_spend_currency,
             dry_run=self.dry_run,
             max_workers=self.max_workers,
         )
@@ -418,11 +457,16 @@ class Gateway:
         self,
         shipment: Shipment,
         *,
+        sources: Iterable[str] | None = None,
         providers: Iterable[str] | None = None,
         carriers: Iterable[str] | None = None,
         services: Iterable[ServiceKey | str] | None = None,
     ) -> GatewayQuote:
         """Rate through all eligible sources, or the configured fallback order.
+
+        Filters are ANDed. `sources` selects by the names you configured;
+        `providers` selects by adapter type. An unknown name in either is a
+        `ConfigurationError` rather than a silently empty result.
 
         With no `fallback`, sources are called **concurrently** and the results are
         assembled in configured-source order, so output does not depend on which
@@ -434,7 +478,7 @@ class Gateway:
         """
         keys = self._keys(services)
         self._validate_services(keys, providers)
-        eligible = self._eligible_sources(providers)
+        eligible = self._eligible_sources(sources, providers)
 
         if self.fallback is not None:
             return self._rate_sequentially(eligible, shipment, carriers, keys)
@@ -506,9 +550,12 @@ class Gateway:
                 f"rate provider {rate.provider!r} does not match source "
                 f"{rate.source!r} ({adapter.name!r})"
             )
-        label = Client(adapter, max_spend=self.max_spend, dry_run=self.dry_run).buy(
-            shipment, rate
-        )
+        label = Client(
+            adapter,
+            max_spend=self.max_spend,
+            max_spend_currency=self.max_spend_currency,
+            dry_run=self.dry_run,
+        ).buy(shipment, rate)
         return replace(label, source=rate.source)
 
     def void(self, label: Label) -> bool:

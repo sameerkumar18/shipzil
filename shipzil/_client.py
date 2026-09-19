@@ -40,12 +40,16 @@ class Client:
         adapter: Adapter,
         *,
         max_spend: Decimal | float | str | None = None,
+        max_spend_currency: str | None = None,
         dry_run: bool = False,
         max_workers: int | None = None,
     ):
         self.adapter = adapter
         self.dry_run = dry_run
         self.max_spend = Decimal(str(max_spend)) if max_spend is not None else None
+        self.max_spend_currency = (
+            max_spend_currency.upper() if max_spend_currency else None
+        )
         self.max_workers = max_workers
 
     # ── rating ──────────────────────────────────────────────────────
@@ -118,11 +122,27 @@ class Client:
         Guardrails run before any network call, so a dry run or a spend-limit
         breach costs nothing.
         """
-        if self.max_spend is not None and rate.currency is None:
-            raise ConfigurationError(
-                "max_spend cannot be enforced because this rate has no currency",
-                provider=self.adapter.name,
-            )
+        if self.max_spend is not None:
+            # A numeric limit is meaningless against an unknown or different
+            # currency, and shipzil does not convert money. Refuse rather than
+            # compare 25 USD against 25 of something else.
+            if rate.currency is None:
+                raise ConfigurationError(
+                    "max_spend cannot be enforced: this rate has no currency. "
+                    "ShipStation v1 does not return one.",
+                    provider=self.adapter.name,
+                )
+            if (
+                self.max_spend_currency is not None
+                and rate.currency.upper() != self.max_spend_currency
+            ):
+                raise ConfigurationError(
+                    f"max_spend is set in {self.max_spend_currency} but this rate is "
+                    f"in {rate.currency.upper()}, and shipzil does not convert "
+                    "currency. Set max_spend_currency to match, or filter by "
+                    "currency before buying.",
+                    provider=self.adapter.name,
+                )
         if self.max_spend is not None and rate.amount > self.max_spend:
             raise SpendLimitExceeded(
                 f"rate {rate.amount} exceeds max_spend {self.max_spend}",

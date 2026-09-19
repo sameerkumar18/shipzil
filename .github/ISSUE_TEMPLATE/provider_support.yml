@@ -1,0 +1,50 @@
+name: Provider support
+description: Add a provider, or report a gap in an existing adapter.
+labels: [provider]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adapter changes need evidence from the provider's current schema, not its
+        prose documentation. See CONTRIBUTING.md.
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: "Sendcloud, or shipstation_v2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request
+      options:
+        - a new provider adapter
+        - a field or operation an existing adapter does not send
+        - a provider behaviour shipzil reports incorrectly
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Schema evidence
+      description: |
+        Link the provider's schema or model page for the fields involved, and quote
+        the relevant part. A prose example is not enough; field nesting and
+        required values have to come from the schema.
+    validations:
+      required: true
+
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Semantics that differ from the current adapters
+      description: |
+        Especially: is a customs value per unit or a line total, is multi-parcel
+        rating native, how is duty liability expressed, and is there a no-charge
+        test path for purchases.
+    validations:
+      required: false

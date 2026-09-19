@@ -11,15 +11,13 @@ implemented changes.
 
 - Publish the repository and create a tag that matches `shipzil.__version__`.
 - Replace the temporary development install instructions with a real pinned tag.
-- Separate source-name filtering from adapter-name filtering. `providers=` currently
-  accepts both, which is ambiguous when a source has a custom name.
+
 - Run ShipStation v2 purchase and void with an account approved for safe testing.
-- Add current live tests for Easyship and ShipStation v1. Their present coverage is
-  fixture, payload and retained-response based.
-- Decide whether `max_spend` should become currency-qualified. It currently applies
-  a numeric limit to the selected rate and performs no conversion.
-- Remove or implement public model fields that current adapters do not populate,
-  including `Label.parcel_labels` and package-piece tracking metadata.
+- Add a live ShipStation v1 `testLabel` purchase test. Rating is now covered live
+  for all four adapters; only v1 purchase and v2 purchase remain unexercised.
+
+- Populate per-package label output once a ShipStation v2 purchase has been run
+  live. `Label.parcel_labels` was removed rather than shipped always empty.
 
 ## Adapter work
 

@@ -1,0 +1,37 @@
+version: 2
+
+updates:
+  # Python: runtime has no dependencies, so this tracks the dev toolchain only.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: npm
+    directory: /docs-site
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(docs)"
+    groups:
+      fumadocs:
+        patterns:
+          - "fumadocs*"
+      next:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+
+  # setup-uv has no moving major tag, so a pinned version needs updating here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"

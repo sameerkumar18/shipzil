@@ -1,0 +1,84 @@
+name: Bug report
+description: Something behaves differently from the documented contract.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not include live credentials, real customer addresses or real
+        label data. Sanitize provider payloads the way `tests/fixtures/README.md`
+        describes.
+
+        For a security issue, use a
+        [private advisory](https://github.com/sameerkumar18/shipzil/security/advisories/new)
+        instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: shipzil version or commit
+      placeholder: "0.1.0, or the commit SHA from your lockfile"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - shippo
+        - easyship
+        - shipstation_v1
+        - shipstation_v2
+        - more than one
+        - not provider specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - rating
+        - purchase
+        - void or refund
+        - filtering or service keys
+        - customs or international
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and where that is documented
+      description: Link the docs page or quote the contract, so we can tell a bug from a missing feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include `quote.explain()` output where relevant, and the exception type and message.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest snippet that shows it. Replace credentials with placeholders.
+      render: python
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.4"
+    validations:
+      required: true

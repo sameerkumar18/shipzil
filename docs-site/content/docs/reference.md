@@ -22,6 +22,7 @@ z.Gateway(
     *,
     fallback=None,
     max_spend=None,
+    max_spend_currency=None,
     dry_run=False,
     max_workers=None,
     **credentials,
@@ -33,7 +34,8 @@ z.Gateway(
 | `sources` | `Mapping[str, Adapter]`; caller-defined source name to configured adapter |
 | `**credentials` | short form: provider name to credential; mutually exclusive with `sources` |
 | `fallback` | sequential source order; `None` calls all eligible sources concurrently |
-| `max_spend` | numeric purchase limit in the selected rate's currency; no conversion |
+| `max_spend` | refuse to buy above this amount |
+| `max_spend_currency` | currency `max_spend` is expressed in; a rate in another currency is refused, not converted |
 | `dry_run` | return a synthetic label instead of calling a purchase endpoint |
 | `max_workers` | worker count per source or parcel executor, not a global request cap |
 
@@ -50,6 +52,7 @@ z.Gateway(shipstation_v1=("key", "secret"))
 gateway.get_rates(
     shipment,
     *,
+    sources=None,
     providers=None,
     carriers=None,
     services=None,
@@ -59,8 +62,9 @@ gateway.buy(shipment, rate) -> Label
 gateway.void(label) -> bool
 ```
 
-`providers=` currently matches either source names or adapter names. The three
-filters intersect.
+`sources=` matches configured source names; `providers=` matches adapter types.
+All filters intersect, and an unknown source or provider raises
+`ConfigurationError`.
 
 `buy()` requires a rate returned by this Gateway and uses `rate.source`.
 `void()` uses `label.source`.
@@ -184,7 +188,6 @@ Required: a `weight` or items from which weight can be derived.
 | `provider`, `source` | adapter and configured account |
 | `shipment_id` | provider shipment/transaction id |
 | `is_test` | `True`, `False` or `None` when undetectable |
-| `parcel_labels` | reserved; current adapters do not populate it |
 | `raw` | provider response |
 
 ### Exclusion
