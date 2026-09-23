@@ -11,9 +11,8 @@ There is no hosted shipzil service or per-label fee.
 The phrase describes the product category; shipzil is not affiliated with
 OpenRouter.
 
-!!! warning "Alpha"
-    0.1.0 is published, and the interface may change before 1.0. Pin a version in
-    your lockfile.
+> **Alpha.** 0.1.0 is published, and the interface may change before 1.0. Pin a
+> version in your lockfile.
 
 ## Start here
 
@@ -99,6 +98,7 @@ uv add git+https://github.com/sameerkumar18/shipzil.git
 | Handle partial failures and uncertain purchases | [Errors and exclusions](./errors.md) |
 | Look up fields and methods | [Reference](./reference.md) |
 | Review evidence status | [Evidence](./research.md) |
+| Move off the Shippo, ShipEngine or ShipStation SDK | [Migrating](./migrating.md) |
 | See unreleased work and remaining gaps | [Roadmap](./roadmap.md) |
 
 shipzil is licensed under MIT. Commercial use, modification and distribution are
