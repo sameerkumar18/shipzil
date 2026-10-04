@@ -228,6 +228,18 @@ make docs-build      # static docs and generated Python reference
 [Errors](https://sameerkumar18.github.io/shipzil/docs/errors/) ·
 [Reference](https://sameerkumar18.github.io/shipzil/docs/reference/)
 
+## Carrier API status
+
+[shipzil.com](https://shipzil.com) is a free status monitor for the USPS, FedEx and UPS
+APIs from the same author, and a separate project from this library. It
+cross-references what EasyPost, Shippo, ShipStation and ShipEngine report, and sends
+its own production rate request to each platform every 5 minutes. Useful when a rate
+request fails and you need to know whether it is the carrier or your platform:
+[USPS](https://shipzil.com/carrier/usps) ·
+[FedEx](https://shipzil.com/carrier/fedex) ·
+[UPS](https://shipzil.com/carrier/ups) ·
+[platform reliability compared](https://shipzil.com/compare).
+
 ## License
 
 MIT. Commercial use, modification and distribution are allowed under the terms in
